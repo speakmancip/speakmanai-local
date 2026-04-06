@@ -25,7 +25,7 @@ Most AI tools give you a single model responding to a single prompt. SPEAKMAN.AI
 
 No Python, no Docker, no terminal required.
 
-1. Download `SpeakmanAI.exe` from the [releases page](https://github.com/speakmancid/speakmanai-local/releases)
+1. Download `SpeakmanAI.exe` from the [releases page](https://github.com/speakmancip/speakmanai-local/releases)
 2. Run it — a system tray icon appears and your browser opens automatically
 3. Choose your AI provider and enter your API key on the setup page
 4. Click **Add to Claude Code** (or Claude Desktop / Cursor) to connect your assistant
@@ -215,7 +215,7 @@ curl http://localhost:8000/health
 
 ## Skills & Document Generation
 
-**[speakmanai-cc](https://github.com/speakmancid/speakmanai-cc)** is a companion repository of Claude Code skills that work with any SPEAKMAN.AI deployment — local, Docker, or cloud.
+**[speakmanai-cc](https://github.com/speakmancip/speakmanai-cc)** is a companion repository of Claude Code skills that work with any SPEAKMAN.AI deployment — local, Docker, or cloud.
 
 | Skill | Command | What it does |
 |---|---|---|
@@ -223,7 +223,7 @@ curl http://localhost:8000/health
 | Compliance Report | `/generate-compliance-report` | Runs a compliance workflow and produces a risk assessment report |
 | Workflow Creator | `/generate-speakmanai-workflow` | Designs and exports a new workflow definition ready for import |
 
-Skills install globally into Claude Code and work from any project directory. See the [speakmanai-cc README](https://github.com/speakmancid/speakmanai-cc) for installation instructions.
+Skills install globally into Claude Code and work from any project directory. See the [speakmanai-cc README](https://github.com/speakmancip/speakmanai-cc) for installation instructions.
 
 ---
 
