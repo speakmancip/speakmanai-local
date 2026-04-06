@@ -152,7 +152,7 @@ def _deep_set(obj: Any, dot_path: str, value: Any) -> None:
 # ─────────────────────────────────────────────
 
 class SQLiteCursor:
-"""Async cursor with .sort(), .limit(), .to_list(), and async iteration."""
+    """Async cursor with .sort(), .limit(), .to_list(), and async iteration."""
 
     def __init__(self, collection: "SQLiteCollection", filter: dict, projection: dict):
         self._col = collection
