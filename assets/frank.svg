@@ -57,8 +57,6 @@
     </clipPath>
   </defs>
 
-  <!-- BACKGROUND -->
-  <circle cx="200" cy="200" r="200" fill="#1f1f1f" />
 
   <!-- BODY -->
   <g transform="translate(0, 40)">
