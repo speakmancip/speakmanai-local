@@ -2,12 +2,6 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-<div align="center">
-  <img src="assets/frank.svg" width="160" alt="Frank — SPEAKMAN.AI mascot" />
-</div>
-
-<br/>
-
 **SPEAKMAN.AI** is a local multi-agent workflow engine exposed entirely via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Connect it to your AI assistant — Claude Code, Claude Desktop, or Cursor — and run sophisticated multi-step AI pipelines directly from your tools, against your own LLM provider, on your own machine.
 
 Built-in workflows include **Solution Architecture**, **Capability Generation**, and a **Workflow Builder** for creating your own pipelines. Every workflow is a coordinated chain of AI agents that collaborate, validate each other's outputs, and produce structured professional-grade results.
