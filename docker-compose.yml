@@ -1,0 +1,48 @@
+services:
+
+  # ── MCP Server (always runs) ─────────────────────────────────────────────
+  speakmanai-local:
+    build:
+      context: ./orchestration/mcp-server
+    ports:
+      - "8000:8000"
+    environment:
+      # Database mode — set USE_SQLITE=true to skip MongoDB entirely
+      - USE_SQLITE=${USE_SQLITE:-false}
+      - SPEAKMANAI_DB_PATH=${SPEAKMANAI_DB_PATH:-/data/speakmanai.db}
+      # MongoDB (used when USE_SQLITE=false)
+      - MONGO_ATLAS_URI=${MONGO_ATLAS_URI:-mongodb://mongodb:27017/}
+      - RAW_EVENTS_DB_NAME=${RAW_EVENTS_DB_NAME:-speakmanai_db}
+      # LLM Provider — set LLM_PROVIDER to: gemini | anthropic | openai | ollama
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-gemini-2.5-flash}
+      - ADVANCED_MODEL=${ADVANCED_MODEL:-}
+      # Provider API keys (leave blank for providers you are not using)
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # Ollama
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - OLLAMA_FALLBACK_MODEL=${OLLAMA_FALLBACK_MODEL:-qwen2.5:14b}
+      # Vertex AI (optional — leave blank if using GEMINI_API_KEY instead)
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID:-}
+      - GCP_REGION=${GCP_REGION:-us-east1}
+    volumes:
+      - speakmanai_data:/data
+    extra_hosts:
+      # Allows the container to reach Ollama running on the host
+      - "host.docker.internal:host-gateway"
+
+  # ── MongoDB (optional — activate with: docker-compose --profile mongo up) ─
+  mongodb:
+    image: mongo:latest
+    profiles:
+      - mongo
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo_data:/data/db
+
+volumes:
+  speakmanai_data:
+  mongo_data:

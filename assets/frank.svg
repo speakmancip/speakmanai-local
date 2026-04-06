@@ -1,0 +1,112 @@
+<svg
+  viewBox="0 0 400 400"
+  width="400"
+  height="400"
+  xmlns="http://www.w3.org/2000/svg"
+  aria-labelledby="agentTitle"
+>
+  <title id="agentTitle">Frank</title>
+  <defs>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="2" result="coloredBlur" />
+      <feMerge>
+        <feMergeNode in="coloredBlur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="3"/>
+      <feOffset dx="0" dy="2" result="offsetblur"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.5"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <radialGradient id="headGradient" cx="50%" cy="40%" r="50%" fx="50%" fy="30%">
+      <stop offset="0%" stop-color="#4a4a4a" />
+      <stop offset="40%" stop-color="#2d2d2d" />
+      <stop offset="90%" stop-color="#1a1a1a" />
+      <stop offset="100%" stop-color="#111111" />
+    </radialGradient>
+
+    <linearGradient id="suitGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#333333" />
+      <stop offset="100%" stop-color="#1a1a1a" />
+    </linearGradient>
+
+    <linearGradient id="tieGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#4ade80" />
+      <stop offset="50%" stop-color="#86efac" />
+      <stop offset="100%" stop-color="#4ade80" />
+    </linearGradient>
+
+    <linearGradient id="hexGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#86efac" />
+      <stop offset="100%" stop-color="#4ade80" />
+    </linearGradient>
+
+    <path id="hex" d="M -14,0 L -7,-12 L 7,-12 L 14,0 L 7,12 L -7,12 Z" />
+
+    <clipPath id="headClip">
+      <ellipse cx="200" cy="180" rx="90" ry="110" />
+    </clipPath>
+  </defs>
+
+  <!-- BACKGROUND -->
+  <circle cx="200" cy="200" r="200" fill="#1f1f1f" />
+
+  <!-- BODY -->
+  <g transform="translate(0, 40)">
+    <path
+      d="M 60,360 C 60,300 120,260 160,240 L 200,260 L 240,240 C 280,260 340,300 340,360 L 340,400 L 60,400 Z"
+      fill="url(#suitGradient)"
+    />
+    <path d="M 160,240 L 200,300 L 240,240 L 200,260 Z" fill="#222" />
+    <path d="M 160,240 L 200,260 L 200,300 L 175,280 Z" fill="#2a2a2a" />
+    <path d="M 240,240 L 200,260 L 200,300 L 225,280 Z" fill="#1a1a1a" />
+
+    <g filter="url(#glow)">
+      <path d="M 200,265 L 185,285 L 200,305 L 215,285 Z" fill="url(#tieGradient)" />
+      <path d="M 200,305 L 188,380 L 200,390 L 212,380 Z" fill="#4ade80" />
+    </g>
+  </g>
+
+  <!-- HEAD -->
+  <ellipse cx="200" cy="180" rx="90" ry="110" fill="url(#headGradient)" filter="url(#softShadow)"/>
+
+  <!-- FACE -->
+  <g filter="url(#glow)">
+    <rect x="145" y="175" width="35" height="4" rx="2" fill="#86efac" />
+    <rect x="220" y="175" width="35" height="4" rx="2" fill="#86efac" />
+  </g>
+  <g filter="url(#glow)">
+    <path d="M 175,245 Q 200,250 225,245" stroke="#86efac" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.8"/>
+  </g>
+
+  <!-- FOREHEAD HEXAGONS -->
+  <g clip-path="url(#headClip)" filter="url(#glow)">
+    <g transform="translate(200, 112)">
+      <g fill="url(#hexGradient)" stroke="#2d2d2d" stroke-width="1.5">
+        <!-- Bottom row -->
+        <use href="#hex" x="0" y="0" opacity="0.9" />
+        <!-- Middle row -->
+        <use href="#hex" x="-21" y="-12" opacity="0.85" />
+        <use href="#hex" x="0" y="-24" opacity="0.85" />
+        <use href="#hex" x="21" y="-12" opacity="0.85" />
+        <!-- Top row -->
+        <use href="#hex" x="-42" y="-24" opacity="0.4" />
+        <use href="#hex" x="-21" y="-36" opacity="0.6" />
+        <use href="#hex" x="0" y="-48" opacity="0.7" />
+        <use href="#hex" x="21" y="-36" opacity="0.6" />
+        <use href="#hex" x="42" y="-24" opacity="0.4" />
+      </g>
+    </g>
+  </g>
+
+  <ellipse cx="200" cy="110" rx="40" ry="20" fill="white" opacity="0.05" />
+</svg>
