@@ -6,6 +6,7 @@ Transport: Streamable HTTP (stateless, per-request auth)
 import asyncio
 import os
 import re
+import sys
 import json
 import logging
 import uuid
@@ -17,7 +18,11 @@ from urllib.parse import unquote
 import json as _json
 
 from dotenv import load_dotenv
-load_dotenv()
+if not getattr(sys, "_MEIPASS", None):
+    # Desktop exe is fully driven by ~/.speakmanai/config.json (see launcher.py) —
+    # skip .env entirely so it never inherits Docker-only settings (e.g. a container
+    # GOOGLE_APPLICATION_CREDENTIALS path) from an unrelated .env in/above the CWD.
+    load_dotenv()
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse
@@ -436,8 +441,10 @@ async def _get_mcp_pause_config(doc: dict) -> dict | None:
 
     # Find the MCP_PAUSE event to get the active step index and the prior output as context.
     mcp_pause_step_index = None
+    mcp_pause_event = None
     for event in reversed(events):
         if event.get("attributes", {}).get("event_type") == "MCP_PAUSE":
+            mcp_pause_event = event
             try:
                 mcp_pause_step_index = int(event.get("attributes", {}).get("current_step_index", -1))
             except (TypeError, ValueError):
@@ -478,6 +485,19 @@ async def _get_mcp_pause_config(doc: dict) -> dict | None:
         agent_type = "MCP_LLM_DELEGATE"
 
     context = _compile_dependencies_context(agent_doc, events)
+
+    # If this pause is a re-prompt after a failed validation, surface the prior
+    # attempt and the validator's feedback so the delegate can revise its answer.
+    pause_exec_ctx = mcp_pause_event.get("data", {}).get("execution_context", {}) if mcp_pause_event else {}
+    validation_feedback = pause_exec_ctx.get("validation_feedback")
+    if validation_feedback:
+        previous_output = pause_exec_ctx.get("previous_output", "")
+        prior_block = f"\n\n# YOUR PREVIOUS OUTPUT\n{previous_output}" if previous_output else ""
+        context += (
+            f"{prior_block}\n\n# VALIDATOR RESPONSE\n"
+            f"Revise your previous output to address every issue raised below:\n{validation_feedback}"
+        )
+
     schema = agent_doc.get("inputSchema", {}) if agent_doc else {}
 
     return {
@@ -627,8 +647,8 @@ async def get_outputs(session_id: str, mcp_ctx: Context) -> str:
             if "CAPABILITY_GENERATOR" in workflow_id.upper()
             else [
                 "Call get_output(session_id, agent_id) for each output you need — fetch only what is relevant to your task.",
-                "Primary deliverable: get_output(session_id, 'MCP_TECHNICAL_WRITER_V2') — full Solution Architecture Document in Markdown.",
-                "For PowerPoint: fetch MCP_TECHNICAL_WRITER_V2 and MCP_TECHNICAL_VISUALIZATION_SPECIALIST_V1, then use python-pptx.",
+                "For the full solution architecture: fetch MCP_BUSINESS_CONTEXT_CLARIFIER_V1, MCP_BUSINESS_ANALYST_V1, MCP_BUSINESS_APPLICATION_ARCHITECT_V1, MCP_TECHNICAL_SOLUTION_ARCHITECT_V1 — each agent is a self-contained deliverable.",
+                "For PowerPoint: fetch MCP_TECHNICAL_SOLUTION_ARCHITECT_V1 and MCP_TECHNICAL_VISUALIZATION_SPECIALIST_V1, then use python-pptx.",
                 "For dev planning / ADR register: fetch MCP_TECHNICAL_SOLUTION_ARCHITECT_V1 and MCP_BUSINESS_APPLICATION_ARCHITECT_V1.",
                 "For compliance report: fetch MCP_COMPLIANCE_OFFICER_V2.",
                 "For stakeholder briefing: fetch MCP_BUSINESS_ANALYST_V1.",
@@ -1058,7 +1078,10 @@ async def architecture_brief(system_name: str, business_context: str) -> str:
         "6. Call submit_response(session_id, json_capabilities_string) to continue the pipeline\n"
         "7. Poll with poll_workflow() every 30-60 seconds until status is COMPLETED\n"
         "8. Call get_outputs() to get the manifest, then get_output() for each agent deliverable\n\n"
-        "The primary deliverable is MCP_TECHNICAL_WRITER_V2 — the full Solution Architecture Document in Markdown."
+        "Individual agent outputs are the deliverables — fetch each with get_output(session_id, agent_id). "
+        "Key outputs: MCP_BUSINESS_CONTEXT_CLARIFIER_V1 (business context), MCP_BUSINESS_ANALYST_V1 (requirements + personas), "
+        "MCP_BUSINESS_APPLICATION_ARCHITECT_V1 (component catalog + data flows), MCP_TECHNICAL_SOLUTION_ARCHITECT_V1 (tech arch + ADRs), "
+        "MCP_COMPLIANCE_OFFICER_V2 (compliance + RTM), MCP_TECHNICAL_VISUALIZATION_SPECIALIST_V1 (Mermaid diagram)."
     )
 
 
@@ -1127,11 +1150,14 @@ def _workflows_and_agents_dir() -> Path:
 
 
 async def seed_if_empty() -> None:
-    """Import all bundled workflow JSON files if the database has no workflows yet."""
+    """Import any bundled workflow JSON files whose workflowId isn't in the database yet.
+
+    Runs on every startup rather than a one-time empty-database check, so workflow files
+    added to WorkflowsAndAgents/ after a user's first launch (e.g. a new bundled workflow
+    shipped in an update) still get imported — without touching workflows/agents that are
+    already present, which may have been hand-edited via import_agent/import_workflow.
+    """
     db = get_db()
-    existing = await db["workflows"].find({"workflowType": "mcp"}).to_list(length=1)
-    if existing:
-        return
 
     wf_dir = _workflows_and_agents_dir()
     if not wf_dir.is_dir():
@@ -1145,13 +1171,19 @@ async def seed_if_empty() -> None:
             workflow = data.get("workflow")
             agents = data.get("agents", [])
 
-            if workflow and "workflowId" in workflow:
-                _strip_mongo_export_fields(workflow)
-                await db["workflows"].update_one(
-                    {"workflowId": workflow["workflowId"]},
-                    {"$set": workflow},
-                    upsert=True,
-                )
+            if not workflow or "workflowId" not in workflow:
+                continue
+
+            already_seeded = await db["workflows"].find_one({"workflowId": workflow["workflowId"]})
+            if already_seeded:
+                continue
+
+            _strip_mongo_export_fields(workflow)
+            await db["workflows"].update_one(
+                {"workflowId": workflow["workflowId"]},
+                {"$set": workflow},
+                upsert=True,
+            )
 
             for agent in agents:
                 if "agentId" not in agent:
@@ -1169,7 +1201,8 @@ async def seed_if_empty() -> None:
         except Exception as e:
             log.warning(f"Failed to seed {json_path.name}: {e}")
 
-    log.info(f"Database seeding complete — {count} workflow file(s) imported.")
+    if count:
+        log.info(f"Database seeding complete — {count} new workflow file(s) imported.")
 
 
 @app.get("/health")
@@ -1191,10 +1224,10 @@ async def quit_server():
 _CONFIG_PATH = Path.home() / ".speakmanai" / "config.json"
 
 _PROVIDER_MODELS = {
-    "gemini":    {"fast": "gemini-2.5-flash",       "advanced": "gemini-2.5-pro"},
-    "anthropic": {"fast": "claude-sonnet-4-6",       "advanced": "claude-opus-4-6"},
-    "openai":    {"fast": "gpt-4o-mini",             "advanced": "gpt-4o"},
-    "ollama":    {"fast": "",                        "advanced": ""},
+    "gemini":    {"fast": "gemini-2.5-flash-lite", "standard": "gemini-2.5-flash",  "advanced": "gemini-2.5-pro"},
+    "anthropic": {"fast": "claude-haiku-4-5-20251001", "standard": "claude-sonnet-4-6", "advanced": "claude-opus-4-8"},
+    "openai":    {"fast": "gpt-4o-mini",           "standard": "gpt-4o",            "advanced": "gpt-4o"},
+    "ollama":    {"fast": "",                       "standard": "",                  "advanced": ""},
 }
 
 _MCP_CLIENT_PATHS = {
@@ -1226,13 +1259,20 @@ def _apply_config_to_env(cfg: dict) -> None:
         "openai_api_key":    "OPENAI_API_KEY",
         "ollama_base_url":   "OLLAMA_BASE_URL",
         "default_model":     "DEFAULT_MODEL",
+        "standard_model":    "STANDARD_MODEL",
         "advanced_model":    "ADVANCED_MODEL",
         "execution_mode":    "EXECUTION_MODE",
+        "gcp_project_id":    "GCP_PROJECT_ID",
+        "gcp_region":        "GCP_REGION",
     }
     for cfg_key, env_key in mapping.items():
         val = cfg.get(cfg_key)
         if val:
             os.environ[env_key] = str(val)
+        elif cfg_key in cfg:
+            # Explicitly cleared (e.g. switching Gemini API key → Vertex AI) — drop
+            # the stale env var so it doesn't keep winning in the same process.
+            os.environ.pop(env_key, None)
 
 
 @app.get("/setup", response_class=HTMLResponse)
@@ -1320,7 +1360,12 @@ async def setup_mcp_client(request: Request):
 
 def _build_setup_html(cfg: dict) -> str:
     """Generate the setup page HTML."""
-    provider = cfg.get("llm_provider", "gemini")
+    provider       = cfg.get("llm_provider", "gemini")
+    saved_fast     = cfg.get("default_model", "")
+    saved_standard = cfg.get("standard_model", "")
+    saved_advanced = cfg.get("advanced_model", "")
+    saved_gcp_project = cfg.get("gcp_project_id", "")
+    saved_gcp_region  = cfg.get("gcp_region", "us-east1")
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1372,16 +1417,28 @@ def _build_setup_html(cfg: dict) -> str:
       <label class="{'active' if provider == 'gemini' else ''}" onclick="setProvider('gemini')"><span>Gemini</span></label>
       <label class="{'active' if provider == 'anthropic' else ''}" onclick="setProvider('anthropic')"><span>Claude</span></label>
       <label class="{'active' if provider == 'openai' else ''}" onclick="setProvider('openai')"><span>OpenAI</span></label>
+      <label class="{'active' if provider == 'vertexai' else ''}" onclick="setProvider('vertexai')"><span>Vertex AI</span></label>
       <label class="{'active' if provider == 'ollama' else ''}" onclick="setProvider('ollama')"><span>Ollama</span></label>
     </div>
   </div>
 
   <div id="cloud-section" class="section">
-    <label class="field-label">API Key</label>
-    <input type="password" id="api-key" placeholder="Paste your API key…">
-    <label class="field-label">Default model (fast steps)</label>
+    <div id="api-key-field">
+      <label class="field-label">API Key</label>
+      <input type="password" id="api-key" placeholder="Paste your API key…">
+    </div>
+    <div id="vertex-fields" style="display:none">
+      <label class="field-label">GCP Project ID</label>
+      <input type="text" id="gcp-project-id" placeholder="my-gcp-project" value="{saved_gcp_project}">
+      <label class="field-label">GCP Region</label>
+      <input type="text" id="gcp-region" placeholder="us-east1" value="{saved_gcp_region}">
+      <div class="warning">Uses Application Default Credentials — no API key needed. Run <code>gcloud auth application-default login</code> on this machine first.</div>
+    </div>
+    <label class="field-label">Fast model (quick, lightweight steps)</label>
     <select id="default-model"></select>
-    <label class="field-label">Advanced model (complex reasoning)</label>
+    <label class="field-label">Standard model (general reasoning)</label>
+    <select id="standard-model"></select>
+    <label class="field-label">Advanced model (complex, multi-step reasoning)</label>
     <select id="advanced-model"></select>
   </div>
 
@@ -1428,33 +1485,40 @@ def _build_setup_html(cfg: dict) -> str:
 
 <script>
 const MODELS = {{
-  gemini:    {{ fast: ['gemini-2.5-flash','gemini-2.0-flash'], advanced: ['gemini-2.5-pro','gemini-2.5-flash'] }},
-  anthropic: {{ fast: ['claude-sonnet-4-6','claude-haiku-4-5-20251001'], advanced: ['claude-opus-4-6','claude-sonnet-4-6'] }},
-  openai:    {{ fast: ['gpt-4o-mini','gpt-4o'], advanced: ['gpt-4o','gpt-4o-mini'] }},
-  ollama:    {{ fast: [], advanced: [] }},
+  gemini:    {{ fast: ['gemini-2.5-flash-lite','gemini-2.5-flash','gemini-3.1-flash-lite'], standard: ['gemini-2.5-flash','gemini-2.5-flash-lite','gemini-3-flash-preview'], advanced: ['gemini-2.5-pro','gemini-2.5-flash','gemini-3.1-pro-preview'] }},
+  anthropic: {{ fast: ['claude-haiku-4-5-20251001','claude-sonnet-4-6'], standard: ['claude-sonnet-4-6','claude-haiku-4-5-20251001','claude-sonnet-5'], advanced: ['claude-opus-4-8','claude-sonnet-4-6','claude-sonnet-5','claude-fable-5'] }},
+  openai:    {{ fast: ['gpt-4o-mini','gpt-4o'], standard: ['gpt-4o','gpt-4o-mini'], advanced: ['gpt-4o','gpt-4o-mini'] }},
+  vertexai:  {{ fast: ['gemini-2.5-flash-lite','gemini-2.5-flash','gemini-3.1-flash-lite'], standard: ['gemini-2.5-flash','gemini-2.5-flash-lite','gemini-3-flash-preview'], advanced: ['gemini-2.5-pro','gemini-2.5-flash','gemini-3.1-pro-preview'] }},
+  ollama:    {{ fast: [], standard: [], advanced: [] }},
 }};
+
+const SAVED = {{ fast: '{saved_fast}', standard: '{saved_standard}', advanced: '{saved_advanced}' }};
 
 let currentProvider = '{provider}';
 
 function setProvider(p) {{
   currentProvider = p;
   document.querySelectorAll('#provider-group label').forEach((l,i) => {{
-    l.classList.toggle('active', ['gemini','anthropic','openai','ollama'][i] === p);
+    l.classList.toggle('active', ['gemini','anthropic','openai','vertexai','ollama'][i] === p);
   }});
   document.getElementById('cloud-section').style.display = p === 'ollama' ? 'none' : 'block';
   document.getElementById('ollama-section').style.display = p === 'ollama' ? 'block' : 'none';
+  document.getElementById('api-key-field').style.display = p === 'vertexai' ? 'none' : 'block';
+  document.getElementById('vertex-fields').style.display = p === 'vertexai' ? 'block' : 'none';
   if (p !== 'ollama') populateModelDropdowns(p);
   if (p === 'ollama') checkOllama();
 }}
 
 function populateModelDropdowns(p) {{
-  const m = MODELS[p] || {{ fast: [], advanced: [] }};
-  const fill = (id, opts) => {{
+  const m = MODELS[p] || {{ fast: [], standard: [], advanced: [] }};
+  const fill = (id, opts, saved) => {{
     const sel = document.getElementById(id);
     sel.innerHTML = opts.map(o => `<option value="${{o}}">${{o}}</option>`).join('');
+    if (saved && opts.includes(saved)) sel.value = saved;
   }};
-  fill('default-model', m.fast);
-  fill('advanced-model', m.advanced);
+  fill('default-model',  m.fast,     SAVED.fast);
+  fill('standard-model', m.standard, SAVED.standard);
+  fill('advanced-model', m.advanced, SAVED.advanced);
 }}
 
 async function checkOllama() {{
@@ -1513,13 +1577,24 @@ async function saveConfig() {{
   }};
   if (p === 'ollama') {{
     body.ollama_base_url = document.getElementById('ollama-url').value;
-    body.default_model = document.getElementById('ollama-model').value;
-    body.advanced_model = document.getElementById('ollama-model').value;
+    const ollamaModel = document.getElementById('ollama-model').value;
+    body.default_model   = ollamaModel;
+    body.standard_model  = ollamaModel;
+    body.advanced_model  = ollamaModel;
+  }} else if (p === 'vertexai') {{
+    body.gcp_project_id = document.getElementById('gcp-project-id').value;
+    body.gcp_region     = document.getElementById('gcp-region').value;
+    body.gemini_api_key = '';  // Vertex AI uses ADC, not an API key — clear any saved Gemini key
+    body.default_model   = document.getElementById('default-model').value;
+    body.standard_model  = document.getElementById('standard-model').value;
+    body.advanced_model  = document.getElementById('advanced-model').value;
   }} else {{
     const key = document.getElementById('api-key').value;
     if (key && !key.includes('••')) body[p + '_api_key'] = key;
-    body.default_model = document.getElementById('default-model').value;
-    body.advanced_model = document.getElementById('advanced-model').value;
+    if (p === 'gemini') {{ body.gcp_project_id = ''; body.gcp_region = ''; }}
+    body.default_model   = document.getElementById('default-model').value;
+    body.standard_model  = document.getElementById('standard-model').value;
+    body.advanced_model  = document.getElementById('advanced-model').value;
   }}
   const r = await fetch('/api/config', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(body) }});
   const d = await r.json();

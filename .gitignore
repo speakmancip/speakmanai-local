@@ -23,7 +23,10 @@ dist/
 # SPEAKMAN.AI runtime data
 ~/.speakmanai/
 *.db
+*.db-shm
+*.db-wal
 *.log
+outputs/
 
 # Claude Code local config
 .claude/

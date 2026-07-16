@@ -15,7 +15,7 @@ services:
       - RAW_EVENTS_DB_NAME=${RAW_EVENTS_DB_NAME:-speakmanai_db}
       # LLM Provider — set LLM_PROVIDER to: gemini | anthropic | openai | ollama
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
-      - DEFAULT_MODEL=${DEFAULT_MODEL:-gemini-2.5-flash}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-gemini-2.5-flash-lite}
       - ADVANCED_MODEL=${ADVANCED_MODEL:-}
       # Provider API keys (leave blank for providers you are not using)
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
@@ -27,8 +27,16 @@ services:
       # Vertex AI (optional — leave blank if using GEMINI_API_KEY instead)
       - GCP_PROJECT_ID=${GCP_PROJECT_ID:-}
       - GCP_REGION=${GCP_REGION:-us-east1}
+      - STANDARD_MODEL=${STANDARD_MODEL:-}
+      # Vertex AI ADC — mount host gcloud credentials for local Vertex testing
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
     volumes:
       - speakmanai_data:/data
+      # Application Default Credentials for Vertex AI (local testing):
+      # Linux/Mac:
+      # - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
+      # Windows (uncomment the line below):
+      # - ${APPDATA}/gcloud:/root/.config/gcloud:ro
     extra_hosts:
       # Allows the container to reach Ollama running on the host
       - "host.docker.internal:host-gateway"

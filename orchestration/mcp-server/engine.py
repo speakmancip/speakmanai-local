@@ -11,6 +11,21 @@ from database import get_db
 
 log = logging.getLogger(__name__)
 
+def _extract_json(text: str):
+    """Parse JSON from LLM output, tolerating trailing prose after the closing brace."""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        if "Extra data" in str(e):
+            return json.loads(text[:e.pos])
+        raise
+
+# Max output tokens per Anthropic model — Haiku is capped at 8192 by the API.
+_ANTHROPIC_MAX_TOKENS: dict[str, int] = {
+    "claude-haiku-4-5-20251001": 8192,
+    "claude-haiku-4-5":          8192,
+}
+
 # ─────────────────────────────────────────────
 # LLM Provider Configuration — read dynamically from os.environ at call time
 # so that config changes via /api/config take effect without restart.
@@ -20,7 +35,8 @@ def _cfg():
     """Return current provider config from environment (live — no restart needed)."""
     return {
         "provider":        os.environ.get("LLM_PROVIDER", "gemini").lower(),
-        "default_model":   os.environ.get("DEFAULT_MODEL", "gemini-2.5-flash"),
+        "default_model":   os.environ.get("DEFAULT_MODEL", "gemini-2.5-flash-lite"),
+        "standard_model":  os.environ.get("STANDARD_MODEL", ""),
         "advanced_model":  os.environ.get("ADVANCED_MODEL", ""),
         "ollama_url":      os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
         "ollama_fallback": os.environ.get("OLLAMA_FALLBACK_MODEL", "llama3"),
@@ -34,26 +50,31 @@ def _cfg():
 # Keep module-level aliases for any code that references them directly (backwards compat)
 # These reflect startup values only — use _cfg() inside functions for live values.
 LLM_PROVIDER        = os.environ.get("LLM_PROVIDER", "gemini").lower()
-DEFAULT_MODEL       = os.environ.get("DEFAULT_MODEL", "gemini-2.5-flash")
+DEFAULT_MODEL       = os.environ.get("DEFAULT_MODEL", "gemini-2.5-flash-lite")
+STANDARD_MODEL      = os.environ.get("STANDARD_MODEL", "")
 ADVANCED_MODEL      = os.environ.get("ADVANCED_MODEL", "")
 OLLAMA_BASE_URL     = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
 OLLAMA_FALLBACK_MODEL = os.environ.get("OLLAMA_FALLBACK_MODEL", "llama3")
 
 # ── Abstract model tier → provider model mapping ──────────────────────────
 MODEL_TIERS = {
-    "gemini":    {"fast": "gemini-2.5-flash", "standard": "gemini-2.5-flash", "advanced": "gemini-2.5-pro"},
-    "vertexai":  {"fast": "gemini-2.5-flash", "standard": "gemini-2.5-flash", "advanced": "gemini-2.5-pro"},
-    "anthropic": {"fast": "claude-haiku-4-5-20251001", "standard": "claude-sonnet-4-6", "advanced": "claude-opus-4-6"},
+    "gemini":    {"fast": "gemini-2.5-flash-lite", "standard": "gemini-2.5-flash", "advanced": "gemini-2.5-pro"},
+    "vertexai":  {"fast": "gemini-2.5-flash-lite", "standard": "gemini-2.5-flash", "advanced": "gemini-2.5-pro"},
+    "anthropic": {"fast": "claude-haiku-4-5-20251001", "standard": "claude-sonnet-4-6", "advanced": "claude-opus-4-8"},
     "openai":    {"fast": "gpt-4o-mini",       "standard": "gpt-4o",           "advanced": "gpt-4o"},
     "ollama":    {"fast": None,                 "standard": None,               "advanced": None},
 }
 
 # Reverse map: known model name → tier (used for cross-provider conflict resolution)
 _MODEL_TO_TIER = {
-    "gemini-2.5-pro": "advanced",   "gemini-2.5-flash": "fast",
+    "gemini-2.5-pro": "advanced",   "gemini-2.5-flash": "standard",
+    "gemini-2.5-flash-lite": "fast",
     "gemini-2.0-pro": "advanced",   "gemini-2.0-flash": "fast",
-    "claude-opus-4-6": "advanced",  "claude-sonnet-4-6": "standard",
+    "gemini-3.1-pro-preview": "advanced", "gemini-3-flash-preview": "standard",
+    "gemini-3.1-flash-lite": "fast",
+    "claude-opus-4-8": "advanced",  "claude-sonnet-4-6": "standard",
     "claude-haiku-4-5-20251001": "fast", "claude-haiku-4-5": "fast",
+    "claude-sonnet-5": "standard",  "claude-fable-5": "advanced",
     "gpt-4o": "standard",           "gpt-4o-mini": "fast",
     "o1": "advanced",               "o3-mini": "fast",
 }
@@ -132,6 +153,7 @@ def _resolve_model(model_name: str) -> tuple[str, str]:
     cfg = _cfg()
     provider    = cfg["provider"]
     default     = cfg["default_model"]
+    standard    = cfg["standard_model"]
     advanced    = cfg["advanced_model"]
     ollama_fb   = cfg["ollama_fallback"]
 
@@ -141,6 +163,22 @@ def _resolve_model(model_name: str) -> tuple[str, str]:
     # Abstract tier
     if model_name in ("fast", "standard", "advanced"):
         tiers = MODEL_TIERS.get(provider, {})
+        if model_name == "fast" and default:
+            # Validate default_model belongs to the active provider
+            fast_provider = next(
+                (p for p, t in MODEL_TIERS.items() if default in t.values()), None
+            )
+            if fast_provider is None or fast_provider == provider:
+                return provider, default
+            # Mismatch — fall through to tier lookup
+        if model_name == "standard" and standard:
+            # Validate standard_model belongs to the active provider
+            std_provider = next(
+                (p for p, t in MODEL_TIERS.items() if standard in t.values()), None
+            )
+            if std_provider is None or std_provider == provider:
+                return provider, standard
+            # Mismatch — fall through to tier lookup
         if model_name == "advanced" and advanced:
             # Validate advanced_model belongs to the active provider
             adv_provider = next(
@@ -204,14 +242,13 @@ async def _call_llm(system_prompt: str, user_content: str, model_name: str, mime
     # ── Anthropic ─────────────────────────────────────────────────────────────
     elif active_provider == "anthropic":
         client = _get_llm_client("anthropic", cfg)
-        response = await client.messages.create(
+        async with client.messages.stream(
             model=model_name,
-            max_tokens=8192,
-            temperature=temperature,
+            max_tokens=_ANTHROPIC_MAX_TOKENS.get(model_name, 64000),
             system=system_prompt,
             messages=[{"role": "user", "content": user_content}],
-        )
-        result_text = response.content[0].text if response.content else ""
+        ) as stream:
+            result_text = await stream.get_final_text()
 
     # ── OpenAI ────────────────────────────────────────────────────────────────
     elif active_provider == "openai":
@@ -233,14 +270,16 @@ async def _call_llm(system_prompt: str, user_content: str, model_name: str, mime
             from google.genai import types as _genai_types
         except ImportError:
             raise RuntimeError("google-genai not installed.")
+        _gemini_config_kwargs = {
+            "system_instruction": system_prompt,
+            "response_mime_type": mime_type,
+        }
+        if not model_name.startswith("gemini-3"):
+            _gemini_config_kwargs["temperature"] = temperature
         response = await client.aio.models.generate_content(
             model=model_name,
             contents=user_content,
-            config=_genai_types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=temperature,
-                response_mime_type=mime_type,
-            ),
+            config=_genai_types.GenerateContentConfig(**_gemini_config_kwargs),
         )
         result_text = response.text
 
@@ -423,6 +462,8 @@ async def _handle_start(event: dict, queue: asyncio.Queue):
             a["agentType"] = "MCP_LLM_DELEGATE"
         elif exec_mode == "force_background" and current_type == "MCP_LLM_DELEGATE":
             a["agentType"] = "AI_WORKFLOW"
+        elif a.get("model") == "delegate" and current_type.startswith("AI_"):
+            a["agentType"] = "MCP_LLM_DELEGATE"
 
     workflow_type = workflow_doc.get("workflowType", "mcp")
     
@@ -458,7 +499,7 @@ async def _handle_start(event: dict, queue: asyncio.Queue):
                     mime_type="application/json",
                     temperature=0.0
                 )
-                llm_payload = json.loads(llm_output)
+                llm_payload = _extract_json(llm_output)
                 workflow_def = llm_payload.get("workflow_definition", {})
                 workflow_def["id"] = workflow_id
                 workflow_def["title"] = title
@@ -561,7 +602,7 @@ async def _handle_resume(event: dict, queue: asyncio.Queue):
             elif cleaned.startswith("```"): cleaned = cleaned[3:]
             if cleaned.endswith("```"): cleaned = cleaned[:-3]
             
-            parsed = json.loads(cleaned.strip())
+            parsed = _extract_json(cleaned.strip())
             workflow_def = parsed.get("workflow_definition", {})
             workflow_def["id"] = session_doc["events"][0]["attributes"].get("workflow_id")
             workflow_def["title"] = session_doc.get("session_title", "Local Project")
@@ -580,6 +621,7 @@ async def _handle_resume(event: dict, queue: asyncio.Queue):
                     
                     if exec_mode == "force_delegate" and a_type.startswith("AI_"): a_type = "MCP_LLM_DELEGATE"
                     elif exec_mode == "auto" and a_exec_mode == "delegate" and a_type.startswith("AI_"): a_type = "MCP_LLM_DELEGATE"
+                    elif a_doc.get("model") == "delegate" and a_type.startswith("AI_"): a_type = "MCP_LLM_DELEGATE"
                     
                     if a_type.startswith("MCP_"): step["step_type"] = "MCP_PAUSE"
                     elif a_type == "AI_AGGREGATOR": step["step_type"] = "AGGREGATE"
@@ -603,9 +645,31 @@ async def _handle_resume(event: dict, queue: asyncio.Queue):
         # Prevent the JSON DAG from overwriting the initial user prompt in latest_outputs
         agent_id = "root_planner_dag"
     else:
+        # --- Validation Check (delegated/paused steps) ---
+        # Mirrors the check in _handle_process_step: a delegate agent's output
+        # never passes through that function, so it must be validated here instead.
+        agent_config = await db["agents"].find_one({"agentId": agent_id})
+        validator_agent_id = agent_config.get("validatorAgentId") if agent_config else None
+        if validator_agent_id:
+            latest_event = session_doc["events"][-1]
+            validation_loop = int(latest_event.get("attributes", {}).get("validation_loop", "0"))
+            log.info(f"[{session_id}] Delegated agent {agent_id} requires validation by {validator_agent_id}. Queueing validation...")
+            await queue.put({
+                "action": "validate_step",
+                "session_id": session_id,
+                "current_step_idx": current_step_index,
+                "workflow_def": workflow_def,
+                "agent_id": agent_id,
+                "validator_agent_id": validator_agent_id,
+                "content": content,
+                "validation_loop": validation_loop,
+                "source_outputs": {"source_agent_id": agent_id, "content": content}
+            })
+            return
+
         next_step_index = current_step_index + 1
         is_final = next_step_index >= len(steps)
-        
+
     next_step_type = steps[next_step_index]["step_type"] if not is_final else None
     status = "COMPLETED" if is_final else ("AWAITING_INPUT" if next_step_type == "MCP_PAUSE" else "IN_PROGRESS")
 
@@ -680,12 +744,23 @@ async def _handle_process_step(event: dict, queue: asyncio.Queue):
     mime_type = agent_config.get("mimeType", "text/plain")
     
     # --- Validation Retry Injection ---
-    validation_feedback = latest_event.get("data", {}).get("execution_context", {}).get("validation_feedback")
-    validation_loop = int(latest_event.get("attributes", {}).get("validation_loop", "0"))
-    
+    exec_ctx = latest_event.get("data", {}).get("execution_context", {})
+    validation_feedback = exec_ctx.get("validation_feedback")
+    previous_output     = exec_ctx.get("previous_output")
+    validation_loop     = int(latest_event.get("attributes", {}).get("validation_loop", "0"))
+
     user_content = _compile_dependencies_context(agent_config, events)
     if validation_feedback:
-        user_content += f"\n\n# VALIDATION FEEDBACK (Attempt {validation_loop})\nPlease revise your previous output to address this feedback and achieve a passing score:\n{validation_feedback}"
+        prior_block = (
+            f"\n\n# YOUR PREVIOUS OUTPUT (Attempt {validation_loop})\n{previous_output}"
+            if previous_output else ""
+        )
+        user_content += (
+            f"{prior_block}\n\n"
+            f"# VALIDATOR RESPONSE (Attempt {validation_loop})\n"
+            f"Revise your previous output to address every issue raised below:\n"
+            f"{validation_feedback}"
+        )
 
     log.info(f"[{session_id}] Executing AI step {current_step_idx} with agent {agent_id} via {LLM_PROVIDER}...")
 
@@ -775,7 +850,7 @@ async def _handle_validate_step(event: dict, queue: asyncio.Queue):
     validator_config = await db["agents"].find_one({"agentId": validator_agent_id})
     if not validator_config:
         log.warning(f"[{session_id}] Validator {validator_agent_id} not found. Auto-passing.")
-        score, feedback, max_loops = 10, "Validator not found.", 0
+        score, feedback, max_loops, min_score, val_output = 10, "Validator not found.", 0, 0.0, "Validator not found."
     else:
         val_config = validator_config.get("validationConfig", {})
         max_loops = int(val_config.get("maxLoops", 3))
@@ -790,21 +865,37 @@ async def _handle_validate_step(event: dict, queue: asyncio.Queue):
                 mime_type="application/json",
                 temperature=0.0
             )
-            parsed = json.loads(val_output)
-            score = float(parsed.get("audit_summary", {}).get("overall_score") or parsed.get("score") or 0)
+            parsed = _extract_json(val_output)
+            audit = parsed.get("audit_summary", {})
+            score = float(audit.get("overall_score") or parsed.get("score") or 0)
             feedback = parsed.get("feedback", "")
+
+            # Critical violations always force a fail regardless of overall_score
+            critical_count = int(audit.get("critical_violation_count") or 0)
+            has_critical_in_list = any(
+                v.get("severity") == "CRITICAL"
+                for v in parsed.get("identified_violations", [])
+            )
+            if critical_count > 0 or has_critical_in_list:
+                log.warning(f"[{session_id}] Critical violations detected (count={critical_count}) — overriding score {score} → 0")
+                score = 0.0
+                feedback = f"[{critical_count} CRITICAL VIOLATION(S) — score overridden] {feedback}"
         except Exception as e:
             log.error(f"[{session_id}] Validation failed: {e}")
             score, feedback = 0, f"Validation parsing error: {e}"
+            val_output = feedback
 
     log.info(f"[{session_id}] Validation result: Score={score}, Feedback={feedback[:50]}...")
+
+    steps = workflow_def.get("steps", [])
+    origin_step_type = steps[current_step_idx]["step_type"] if current_step_idx < len(steps) else None
+    is_delegated_step = origin_step_type == "MCP_PAUSE"
 
     if score >= min_score or (validation_loop + 1) >= max_loops:
         if score < min_score:
             log.warning(f"[{session_id}] Max validation loops hit. Advancing despite low score ({score}).")
             
         # PASS! Save the content and advance to the next workflow step
-        steps = workflow_def.get("steps", [])
         next_step_idx = current_step_idx + 1
         is_final = next_step_idx >= len(steps)
         next_step_type = steps[next_step_idx]["step_type"] if not is_final else None
@@ -822,23 +913,31 @@ async def _handle_validate_step(event: dict, queue: asyncio.Queue):
         if status == "IN_PROGRESS": await queue.put({"action": "process_step", "session_id": session_id})
             
     else:
-        # FAIL! Force the AI to retry the exact same step with the feedback injected
+        # FAIL! Retry the exact same step with the feedback injected.
+        # Delegated (MCP_PAUSE) steps must re-pause and wait for submit_response —
+        # they have no real "model" to call via _call_llm — while background AI
+        # steps loop straight back through process_step.
+        retry_status = "AWAITING_INPUT" if is_delegated_step else "IN_PROGRESS"
         retry_event = {
             "event_id": str(uuid.uuid4()), "publish_time": datetime.now(timezone.utc).isoformat(),
             "attributes": {
                 "session_id": session_id, "owner_id": "local_user", "current_step_index": str(current_step_idx),
-                "status": "IN_PROGRESS", "event_type": "WORKFLOW", "validation_retry": "true", "validation_loop": str(validation_loop + 1)
+                "status": retry_status,
+                "event_type": "MCP_PAUSE" if is_delegated_step else "WORKFLOW",
+                "validation_retry": "true", "validation_loop": str(validation_loop + 1)
             },
             "data": {
                 "workflow_definition": workflow_def,
                 "execution_context": {
                     "source_outputs": original_source_outputs,
-                    "validation_feedback": f"Score: {score}/10. Feedback: {feedback}"
+                    "previous_output": content_to_validate,
+                    "validation_feedback": val_output
                 }
             }
         }
         await _log_event_to_db(session_id, retry_event, db)
-        await queue.put({"action": "process_step", "session_id": session_id})
+        if not is_delegated_step:
+            await queue.put({"action": "process_step", "session_id": session_id})
 
 # --- Local Project Output Operations ---
 

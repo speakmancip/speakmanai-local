@@ -69,12 +69,12 @@ Design and generate new SPEAKMAN.AI workflow definitions. Describe what you want
 
 ## LLM Provider Support
 
-| Provider | Notes |
-|---|---|
-| **Gemini** | Recommended — `gemini-2.5-flash` (standard) / `gemini-2.5-pro` (advanced) |
-| **Claude** | `claude-sonnet-4-6` (standard) / `claude-opus-4-6` (advanced) |
-| **OpenAI** | `gpt-4o-mini` (standard) / `gpt-4o` (advanced) |
-| **Ollama** | Local inference — 14B+ model strongly recommended (see below) |
+| Provider | Fast | Standard | Advanced |
+|---|---|---|---|
+| **Gemini** (recommended) | `gemini-2.5-flash-lite` | `gemini-2.5-flash` | `gemini-2.5-pro` |
+| **Claude** | `claude-haiku-4-5` | `claude-sonnet-4-6` | `claude-opus-4-8` |
+| **OpenAI** | `gpt-4o-mini` | `gpt-4o` | `gpt-4o` |
+| **Ollama** | Local inference — 14B+ model strongly recommended (see below) | | |
 
 All workflow agents use abstract model tiers (`fast`, `standard`, `advanced`) — no workflow files need editing when you switch providers. Changes via the setup page take effect immediately.
 
