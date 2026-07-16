@@ -50,6 +50,8 @@ def load_config_to_env() -> None:
                 "default_model":     "DEFAULT_MODEL",
                 "standard_model":    "STANDARD_MODEL",
                 "advanced_model":    "ADVANCED_MODEL",
+                "gcp_project_id":    "GCP_PROJECT_ID",
+                "gcp_region":        "GCP_REGION",
             }
             for cfg_key, env_key in mapping.items():
                 val = cfg.get(cfg_key)

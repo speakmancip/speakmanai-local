@@ -6,6 +6,7 @@ Transport: Streamable HTTP (stateless, per-request auth)
 import asyncio
 import os
 import re
+import sys
 import json
 import logging
 import uuid
@@ -17,7 +18,11 @@ from urllib.parse import unquote
 import json as _json
 
 from dotenv import load_dotenv
-load_dotenv()
+if not getattr(sys, "_MEIPASS", None):
+    # Desktop exe is fully driven by ~/.speakmanai/config.json (see launcher.py) —
+    # skip .env entirely so it never inherits Docker-only settings (e.g. a container
+    # GOOGLE_APPLICATION_CREDENTIALS path) from an unrelated .env in/above the CWD.
+    load_dotenv()
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse
@@ -1480,10 +1485,10 @@ def _build_setup_html(cfg: dict) -> str:
 
 <script>
 const MODELS = {{
-  gemini:    {{ fast: ['gemini-2.5-flash-lite','gemini-2.5-flash','gemini-3.1-flash-lite-preview'], standard: ['gemini-2.5-flash','gemini-2.5-flash-lite','gemini-3-flash-preview'], advanced: ['gemini-2.5-pro','gemini-2.5-flash','gemini-3.1-pro-preview'] }},
+  gemini:    {{ fast: ['gemini-2.5-flash-lite','gemini-2.5-flash','gemini-3.1-flash-lite'], standard: ['gemini-2.5-flash','gemini-2.5-flash-lite','gemini-3-flash-preview'], advanced: ['gemini-2.5-pro','gemini-2.5-flash','gemini-3.1-pro-preview'] }},
   anthropic: {{ fast: ['claude-haiku-4-5-20251001','claude-sonnet-4-6'], standard: ['claude-sonnet-4-6','claude-haiku-4-5-20251001','claude-sonnet-5'], advanced: ['claude-opus-4-8','claude-sonnet-4-6','claude-sonnet-5','claude-fable-5'] }},
   openai:    {{ fast: ['gpt-4o-mini','gpt-4o'], standard: ['gpt-4o','gpt-4o-mini'], advanced: ['gpt-4o','gpt-4o-mini'] }},
-  vertexai:  {{ fast: ['gemini-2.5-flash-lite','gemini-2.5-flash','gemini-3.1-flash-lite-preview'], standard: ['gemini-2.5-flash','gemini-2.5-flash-lite','gemini-3-flash-preview'], advanced: ['gemini-2.5-pro','gemini-2.5-flash','gemini-3.1-pro-preview'] }},
+  vertexai:  {{ fast: ['gemini-2.5-flash-lite','gemini-2.5-flash','gemini-3.1-flash-lite'], standard: ['gemini-2.5-flash','gemini-2.5-flash-lite','gemini-3-flash-preview'], advanced: ['gemini-2.5-pro','gemini-2.5-flash','gemini-3.1-pro-preview'] }},
   ollama:    {{ fast: [], standard: [], advanced: [] }},
 }};
 

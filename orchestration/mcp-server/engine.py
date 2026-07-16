@@ -71,7 +71,7 @@ _MODEL_TO_TIER = {
     "gemini-2.5-flash-lite": "fast",
     "gemini-2.0-pro": "advanced",   "gemini-2.0-flash": "fast",
     "gemini-3.1-pro-preview": "advanced", "gemini-3-flash-preview": "standard",
-    "gemini-3.1-flash-lite-preview": "fast",
+    "gemini-3.1-flash-lite": "fast",
     "claude-opus-4-8": "advanced",  "claude-sonnet-4-6": "standard",
     "claude-haiku-4-5-20251001": "fast", "claude-haiku-4-5": "fast",
     "claude-sonnet-5": "standard",  "claude-fable-5": "advanced",

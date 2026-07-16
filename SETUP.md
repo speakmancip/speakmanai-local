@@ -257,10 +257,10 @@ All workflow agents use abstract tiers (`fast`, `standard`, `advanced`) rather t
 
 `DEFAULT_MODEL`, `STANDARD_MODEL`, and `ADVANCED_MODEL` accept any model name your provider account has access to — you are not limited to the table above. Newer, more capable models are also supported and selectable on the setup page for Gemini and Claude:
 
-- **Gemini 3 preview family** — e.g. `gemini-3.1-flash-lite-preview`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`
+- **Gemini 3 family** — e.g. `gemini-3.1-flash-lite` (GA as of May 2026 — note: no `-preview` suffix, that alias has been retired), `gemini-3-flash-preview`, `gemini-3.1-pro-preview` (Vertex AI: global location only)
 - **Claude 5 family** — `claude-sonnet-5`, `claude-fable-5`
 
-These generally improve output quality but cost more per call than the defaults above — use them for `STANDARD_MODEL` / `ADVANCED_MODEL` on workflows where the extra quality is worth the spend.
+These generally improve output quality but cost more per call than the defaults above — use them for `STANDARD_MODEL` / `ADVANCED_MODEL` on workflows where the extra quality is worth the spend. Preview model names change as Google/Anthropic promote them to general availability — if you get a 404/"model not found" on one of these, check whether the `-preview` suffix has been dropped.
 
 ### Ollama model sizing guidance
 
