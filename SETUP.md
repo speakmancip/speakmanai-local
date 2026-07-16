@@ -17,7 +17,7 @@
 
 ### 1. Create `.env` in the repo root
 
-Set `LLM_PROVIDER` to your chosen provider, fill in that provider's key, and set `DEFAULT_MODEL` / `ADVANCED_MODEL` to match. Leave other provider blocks blank.
+Set `LLM_PROVIDER` to your chosen provider, fill in that provider's key, and set `DEFAULT_MODEL` (fast) / `STANDARD_MODEL` / `ADVANCED_MODEL` to match. Leave other provider blocks blank.
 
 **Gemini**
 ```bash
@@ -27,7 +27,8 @@ RAW_EVENTS_DB_NAME=speakmanai_db
 
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=AIza...
-DEFAULT_MODEL=gemini-2.5-flash
+DEFAULT_MODEL=gemini-2.5-flash-lite
+STANDARD_MODEL=gemini-2.5-flash
 ADVANCED_MODEL=gemini-2.5-pro
 ```
 
@@ -39,8 +40,9 @@ RAW_EVENTS_DB_NAME=speakmanai_db
 
 LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
-DEFAULT_MODEL=claude-sonnet-4-6
-ADVANCED_MODEL=claude-opus-4-6
+DEFAULT_MODEL=claude-haiku-4-5
+STANDARD_MODEL=claude-sonnet-4-6
+ADVANCED_MODEL=claude-opus-4-8
 ```
 
 **OpenAI**
@@ -52,6 +54,7 @@ RAW_EVENTS_DB_NAME=speakmanai_db
 LLM_PROVIDER=openai
 OPENAI_API_KEY=sk-...
 DEFAULT_MODEL=gpt-4o-mini
+STANDARD_MODEL=gpt-4o
 ADVANCED_MODEL=gpt-4o
 ```
 
@@ -65,6 +68,7 @@ LLM_PROVIDER=ollama
 OLLAMA_BASE_URL=http://host.docker.internal:11434
 OLLAMA_FALLBACK_MODEL=qwen2.5:14b
 DEFAULT_MODEL=qwen2.5:14b
+STANDARD_MODEL=qwen2.5:14b
 ADVANCED_MODEL=qwen2.5:14b
 ```
 
@@ -74,10 +78,11 @@ USE_SQLITE=false
 MONGO_ATLAS_URI=mongodb://mongodb:27017/
 RAW_EVENTS_DB_NAME=speakmanai_db
 
-LLM_PROVIDER=gemini
+LLM_PROVIDER=vertexai
 GCP_PROJECT_ID=my-gcp-project
 GCP_REGION=us-east1
-DEFAULT_MODEL=gemini-2.5-flash
+DEFAULT_MODEL=gemini-2.5-flash-lite
+STANDARD_MODEL=gemini-2.5-flash
 ADVANCED_MODEL=gemini-2.5-pro
 ```
 
@@ -102,7 +107,7 @@ import_architecture_plan('<contents of WorkflowsAndAgents/WORKFLOW_CREATOR_V1.js
 import_architecture_plan('<contents of WorkflowsAndAgents/CLAUDE_WORKFLOW_CREATOR_V1.json>')
 ```
 
-> SQLite and Desktop modes seed automatically on first launch — no manual import needed.
+> SQLite and Desktop modes seed automatically on startup — no manual import needed. Only workflows not already in the database are imported, so this also backfills any new bundled workflow after an update without touching ones you've customized.
 
 ### 4. Connect your AI assistant
 
@@ -131,7 +136,8 @@ USE_SQLITE=true
 
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=AIza...
-DEFAULT_MODEL=gemini-2.5-flash
+DEFAULT_MODEL=gemini-2.5-flash-lite
+STANDARD_MODEL=gemini-2.5-flash
 ADVANCED_MODEL=gemini-2.5-pro
 ```
 
@@ -141,7 +147,7 @@ ADVANCED_MODEL=gemini-2.5-pro
 docker-compose up --build
 ```
 
-MongoDB is not started. The SQLite database is stored in the `speakmanai_data` Docker volume at `/data/speakmanai.db`. Workflows are seeded automatically from `WorkflowsAndAgents/` on first launch.
+MongoDB is not started. The SQLite database is stored in the `speakmanai_data` Docker volume at `/data/speakmanai.db`. Workflows are seeded automatically from `WorkflowsAndAgents/` on startup — new workflow files are backfilled on later launches too, without touching ones already in the database.
 
 ---
 
@@ -162,7 +168,8 @@ pip install -r requirements.txt
 USE_SQLITE=true
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=AIza...
-DEFAULT_MODEL=gemini-2.5-flash
+DEFAULT_MODEL=gemini-2.5-flash-lite
+STANDARD_MODEL=gemini-2.5-flash
 ADVANCED_MODEL=gemini-2.5-pro
 ```
 
@@ -174,7 +181,7 @@ Same provider options as the Docker section apply.
 uvicorn server:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-Workflows are seeded automatically on first launch.
+Workflows are seeded automatically on startup, including any new ones added since your last launch.
 
 ---
 
@@ -211,8 +218,8 @@ Config is stored at `~/.speakmanai/config.json`. The SQLite database is at `~/.s
 All modes expose a setup UI at `http://localhost:8000/setup`.
 
 Use it to:
-- Pick your AI provider (Gemini, Claude, OpenAI, Ollama)
-- Enter your API key and choose fast / advanced models
+- Pick your AI provider (Gemini, Claude, OpenAI, Vertex AI, Ollama)
+- Enter your API key (or GCP project/region for Vertex AI, which uses Application Default Credentials instead) and choose fast / standard / advanced models
 - Set the execution mode
 - Connect your AI assistant (Claude Desktop, Claude Code, Cursor)
 
@@ -228,23 +235,32 @@ Use it to:
 
 ## LLM Provider Reference
 
-| Provider | `LLM_PROVIDER` | Key variable | Default model | Advanced model |
-|---|---|---|---|---|
-| Gemini | `gemini` | `GEMINI_API_KEY` | `gemini-2.5-flash` | `gemini-2.5-pro` |
-| Claude | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` | `claude-opus-4-6` |
-| OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-4o-mini` | `gpt-4o` |
-| Ollama | `ollama` | *(none)* | set via `DEFAULT_MODEL` | set via `ADVANCED_MODEL` |
-| Vertex AI | `gemini` | `GCP_PROJECT_ID` + `GCP_REGION` | `gemini-2.5-flash` | `gemini-2.5-pro` |
+| Provider | `LLM_PROVIDER` | Key variable | Fast (`DEFAULT_MODEL`) | Standard (`STANDARD_MODEL`) | Advanced (`ADVANCED_MODEL`) |
+|---|---|---|---|---|---|
+| Gemini | `gemini` | `GEMINI_API_KEY` | `gemini-2.5-flash-lite` | `gemini-2.5-flash` | `gemini-2.5-pro` |
+| Claude | `anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` | `claude-sonnet-4-6` | `claude-opus-4-8` |
+| OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-4o-mini` | `gpt-4o` | `gpt-4o` |
+| Ollama | `ollama` | *(none)* | set via `DEFAULT_MODEL` | set via `STANDARD_MODEL` | set via `ADVANCED_MODEL` |
+| Vertex AI | `vertexai` | `GCP_PROJECT_ID` + `GCP_REGION` | `gemini-2.5-flash-lite` | `gemini-2.5-flash` | `gemini-2.5-pro` |
 
 ### Model tiers
 
-All workflow agents use abstract tiers (`fast`, `standard`, `advanced`) rather than hardcoded model names. Your `DEFAULT_MODEL` and `ADVANCED_MODEL` settings are the authority — changing provider or model in setup takes effect immediately without editing any workflow files.
+All workflow agents use abstract tiers (`fast`, `standard`, `advanced`) rather than hardcoded model names. Your `DEFAULT_MODEL`, `STANDARD_MODEL`, and `ADVANCED_MODEL` settings are the authority — changing provider or model in setup takes effect immediately without editing any workflow files. Leaving `STANDARD_MODEL` or `ADVANCED_MODEL` blank falls back to each provider's built-in default for that tier (see table above).
 
 | Tier | Usage |
 |---|---|
-| `fast` | Simple formatting, classification, validators |
-| `standard` | Content generation, summarisation, analysis |
+| `fast` | Simple formatting, classification, validators — maps to `DEFAULT_MODEL` |
+| `standard` | Content generation, summarisation, analysis — maps to `STANDARD_MODEL` |
 | `advanced` | Complex reasoning, architecture, multi-step synthesis — maps to `ADVANCED_MODEL` |
+
+### Optional: newer / higher-cost models
+
+`DEFAULT_MODEL`, `STANDARD_MODEL`, and `ADVANCED_MODEL` accept any model name your provider account has access to — you are not limited to the table above. Newer, more capable models are also supported and selectable on the setup page for Gemini and Claude:
+
+- **Gemini 3 preview family** — e.g. `gemini-3.1-flash-lite-preview`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`
+- **Claude 5 family** — `claude-sonnet-5`, `claude-fable-5`
+
+These generally improve output quality but cost more per call than the defaults above — use them for `STANDARD_MODEL` / `ADVANCED_MODEL` on workflows where the extra quality is worth the spend.
 
 ### Ollama model sizing guidance
 
