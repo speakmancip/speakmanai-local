@@ -3,6 +3,7 @@
 ## v1.1.0
 
 **Release:** https://github.com/speakmancip/speakmanai-local/releases/tag/v1.1.0
+**Announcement:** https://consulting.speakman.ai/blogs/speakmanai-v1-1-0
 
 ### Headline features
 

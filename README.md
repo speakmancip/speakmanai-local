@@ -6,6 +6,8 @@
 
 Built-in workflows include **Solution Architecture**, **Capability Generation**, and a **Workflow Builder** for creating your own pipelines. Every workflow is a coordinated chain of AI agents that collaborate, validate each other's outputs, and produce structured professional-grade results.
 
+**Latest release: [v1.1.0](https://github.com/speakmancip/speakmanai-local/releases/tag/v1.1.0)** — standard model tier, native Vertex AI, and a new Requirements Engineering workflow. Read the [announcement](https://consulting.speakman.ai/blogs/speakmanai-v1-1-0).
+
 ---
 
 ## Why SPEAKMAN.AI?
