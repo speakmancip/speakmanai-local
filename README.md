@@ -4,9 +4,9 @@
 
 **SPEAKMAN.AI** is a local multi-agent workflow engine exposed entirely via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Connect it to your AI assistant — Claude Code, Claude Desktop, or Cursor — and run sophisticated multi-step AI pipelines directly from your tools, against your own LLM provider, on your own machine.
 
-Built-in workflows include **Solution Architecture**, **Capability Generation**, and a **Workflow Builder** for creating your own pipelines. Every workflow is a coordinated chain of AI agents that collaborate, validate each other's outputs, and produce structured professional-grade results.
+Built-in workflows cover the whole idea-to-architecture arc — **Sizing**, **Solution Architecture**, **Requirements Engineering**, **UX Design** — plus a **Workflow Builder** for creating your own pipelines. Every workflow is a coordinated chain of AI agents that collaborate, validate each other's outputs, and (where the task calls for it) pause for a real human review before continuing.
 
-**Latest release: [v1.1.0](https://github.com/speakmancip/speakmanai-local/releases/tag/v1.1.0)** — standard model tier, native Vertex AI, and a new Requirements Engineering workflow. Read the [announcement](https://consulting.speakman.ai/blogs/speakmanai-v1-1-0).
+**Latest release: [v1.2.0](https://github.com/speakmancip/speakmanai-local/releases/tag/v1.2.0)** — human-in-the-loop revision gates, delegate-first execution through your own connected coding agent, a new `update_session` tool that revises a finished session in place, and a new UX & Interface Design workflow. Read the [announcement](https://consulting.speakman.ai/blogs/speakmanai-v1-2-0).
 
 ---
 
@@ -18,7 +18,7 @@ Most AI tools give you a single model responding to a single prompt. SPEAKMAN.AI
 - **Provider agnostic** — Gemini, Claude, OpenAI, or Ollama (local models)
 - **MCP native** — surfaces as tools in any MCP-compatible AI assistant
 - **Build your own** — design custom workflows with the built-in Workflow Builder
-- **Human-in-the-loop** — workflows can pause and ask for your input mid-pipeline
+- **Human-in-the-loop** — workflows can pause for your input mid-pipeline, or for a real review-and-revise gate on a specific agent's output
 - **Execution flexibility** — run steps with your backend LLM, or hand them to your AI assistant to execute using its local tools
 
 ---
@@ -57,13 +57,33 @@ Converts a plain-text description of your tech stack and business processes into
 
 **Runtime:** ~2–5 minutes
 
+### MCP_SIZING_ESTIMATE_V1
+A lightweight pre-architecture gate. Clarifies a raw business idea, decomposes it into high-level functional components, and produces a relative T-shirt-sized (S/M/L/XL) estimate per component and overall — with a human review-and-revise gate — before anyone commits to a full architecture engagement. Deliberately outputs relative sizes only, never dollar figures; mapping size to cost stays a business decision, not a hardcoded prompt.
+
+**Runtime:** ~5–10 minutes
+
 ### MCP_SOLUTION_ARCHITECTURE_V1
-A full multi-agent Solution Architecture Document (SAD) pipeline. Six specialist agents collaborate to produce business analysis, application architecture, infrastructure design, compliance assessment, Mermaid diagrams, and a complete written document.
+A full multi-agent Solution Architecture Document (SAD) pipeline. Specialist agents collaborate to produce business analysis, application architecture, infrastructure design, compliance assessment, Mermaid diagrams, and a complete written document, with human review gates at each major stage.
 
 **Runtime:** ~10–20 minutes
 
+### MCP_REQUIREMENTS_ENGINEERING_V1
+Turns a completed architecture (or a business description alone) into implementation-ready technical contracts — domain model, use case catalog, field definitions, naming dictionary, and a full OpenAPI schema — with validation loops checking each stage against the one before it.
+
+**Runtime:** ~10–15 minutes
+
+### MCP_UX_DESIGN_V1
+Maps architecture components and requirements into a UI screen inventory, checks that every requirement traces to a real screen, then proposes a design direction and produces clickable, self-contained HTML mockups for human review before any code gets written. The mockup step runs through your connected coding agent rather than a fixed background model.
+
+**Runtime:** ~5–10 minutes
+
 ### WORKFLOW_CREATOR_V1 / CLAUDE_WORKFLOW_CREATOR_V1
-Design and generate new SPEAKMAN.AI workflow definitions. Describe what you want to automate and the workflow builder produces a ready-to-import workflow JSON with agent system prompts.
+Design and generate new SPEAKMAN.AI workflow definitions. Describe what you want to automate and the workflow builder produces a ready-to-import workflow JSON with agent system prompts, including `AI_VALIDATOR` and `HITL_VALIDATOR` gates where they fit.
+
+**Runtime:** ~5–10 minutes
+
+### CLAUDE_SKILL_WORKFLOW_CREATOR_V1
+The delegate-first sibling of the workflow builder above. Produces workflows where any agent needing external data or real tool access runs directly through your connected coding agent (`executionMode: "delegate"`) instead of pausing for a human to paste data in.
 
 **Runtime:** ~5–10 minutes
 
@@ -157,6 +177,7 @@ Switch modes at any time via the setup page or: *"Set execution mode to force_de
 | `get_output` | Fetch the full content of a specific agent's output |
 | `list_sessions` | List recent sessions — use to recover a lost session_id |
 | `cancel_session` | Cancel a stuck or failed session |
+| `update_session` | Revise one agent's output in a completed session and cascade the change through everything downstream — no re-run from scratch |
 | `set_execution_mode` | Switch between auto / force_delegate / force_background |
 | `import_architecture_plan` | Import a workflow JSON into the database |
 | `import_workflow` | Import a workflow definition only |
@@ -221,11 +242,14 @@ curl http://localhost:8000/health
 
 | Skill | Command | What it does |
 |---|---|---|
+| Project Brief | `/generate-project-brief` | Coaches a raw idea into a structured brief before it ever needs a SPEAKMAN.AI session |
 | Solution Architecture | `/generate-sad` | Runs the architecture workflow and renders a branded HTML + PDF document locally |
+| Requirements Engineer | `/generate-requirements` | Runs the requirements workflow and saves implementation-ready coding contracts |
+| UX & Interface Design | `/generate-ux-design` | Runs the UX design workflow and saves the screen inventory, flow diagrams, and mockups |
 | Compliance Report | `/generate-compliance-report` | Runs a compliance workflow and produces a risk assessment report |
 | Workflow Creator | `/generate-speakmanai-workflow` | Designs and exports a new workflow definition ready for import |
 
-Skills install globally into Claude Code and work from any project directory. See the [speakmanai-cc README](https://github.com/speakmancip/speakmanai-cc) for installation instructions.
+This is a sample, not the full list — 17 skills in total, covering the whole SDLC from idea intake through code generation, infrastructure, and pentesting. Skills install globally into Claude Code and work from any project directory. See the [speakmanai-cc README](https://github.com/speakmancip/speakmanai-cc) for the complete list and installation instructions.
 
 ---
 
