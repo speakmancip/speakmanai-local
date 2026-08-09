@@ -348,24 +348,31 @@ async def build_project_record(session_id: str, db):
     agent_docs = await db["agents"].find({"agentId": {"$in": agent_ids}}).to_list(length=None)
     agent_type_map = {a["agentId"]: a.get("agentType", "") for a in agent_docs}
     
-    sections = []
+    # Keyed by agent_id, last-write-wins: an agent under a HITL_VALIDATOR gate logs one
+    # event per review loop (each pause carries that attempt's content) plus one final
+    # event on approval. Without dedup, every intermediate/superseded attempt would show
+    # up as its own section alongside the final one. A dict (not a list) guarantees only
+    # the last — i.e. final approved — content per agent survives, mirroring how
+    # _aggregate_agent_index already dedups for get_output/poll_workflow.
+    sections_by_agent = {}
     for event in events:
         attrs = event.get("attributes", {})
-        if attrs.get("event_type") == "VALIDATION" or attrs.get("validation_retry") == "true":
+        if attrs.get("event_type") == "VALIDATION" or attrs.get("validation_retry") == "true" or attrs.get("hitl_retry") == "true":
             continue
         src = event.get("data", {}).get("execution_context", {}).get("source_outputs", {})
         agent_id = src.get("source_agent_id")
-        
+
         # Filter out HITL pause steps and the planner from the final project document based on true agentType
         if agent_id and not agent_id.startswith("root_planner"):
             a_type = agent_type_map.get(agent_id, "")
-            if a_type != "AI_PLANNER" and (a_type == "MCP_LLM_DELEGATE" or not a_type.startswith("MCP_")): 
-                sections.append({
+            if a_type != "AI_PLANNER" and (a_type == "MCP_LLM_DELEGATE" or not a_type.startswith("MCP_")):
+                sections_by_agent[agent_id] = {
                     "agent_id": agent_id,
                     "content": src.get("content", ""),
                     "title": agent_id.replace("_", " ").title()
-                })
-            
+                }
+    sections = list(sections_by_agent.values())
+
     project_doc = {
         "session_id": session_id,
         "owner_id": "local_user",
@@ -383,7 +390,7 @@ def _compile_dependencies_context(agent_config: dict, events: list) -> str:
     first_output = ""
     for event in events:
         attrs = event.get("attributes", {})
-        if attrs.get("event_type") == "VALIDATION" or attrs.get("validation_retry") == "true":
+        if attrs.get("event_type") == "VALIDATION" or attrs.get("validation_retry") == "true" or attrs.get("hitl_retry") == "true":
             continue
         src = event.get("data", {}).get("execution_context", {}).get("source_outputs", {})
         src_agent = src.get("source_agent_id")
@@ -410,6 +417,137 @@ def _compile_dependencies_context(agent_config: dict, events: list) -> str:
     return "\n\n".join(compiled_parts) if compiled_parts else ""
 
 
+async def _emit_advance_event(session_id: str, db, queue: asyncio.Queue, workflow_def: dict, current_step_idx: int, agent_id: str, content: str):
+    """Advances the workflow past current_step_idx using `content` as the accepted output of
+    agent_id, or marks the session COMPLETED if this was the final step. Shared by the plain
+    AI-step path, the delegate-resume path, and the AI_VALIDATOR/HITL_VALIDATOR PASS paths —
+    'what happens once a step's output is accepted' lives in exactly one place."""
+    steps = workflow_def.get("steps", [])
+    next_step_idx = current_step_idx + 1
+    is_final = next_step_idx >= len(steps)
+    next_step_type = steps[next_step_idx]["step_type"] if not is_final else None
+    status = "COMPLETED" if is_final else ("AWAITING_INPUT" if next_step_type == "MCP_PAUSE" else "IN_PROGRESS")
+
+    new_event = {
+        "event_id": str(uuid.uuid4()), "publish_time": datetime.now(timezone.utc).isoformat(),
+        "attributes": {
+            "session_id": session_id, "owner_id": "local_user",
+            "current_step_index": str(next_step_idx) if not is_final else str(current_step_idx),
+            "status": status,
+            "event_type": "MCP_PAUSE" if status == "AWAITING_INPUT" else "WORKFLOW"
+        },
+        "data": {"workflow_definition": workflow_def, "execution_context": {"source_outputs": {"source_agent_id": agent_id, "content": content}}}
+    }
+    await _log_event_to_db(session_id, new_event, db)
+
+    if status == "COMPLETED":
+        await build_project_record(session_id, db)
+    if status == "IN_PROGRESS":
+        await queue.put({"action": "process_step", "session_id": session_id})
+
+
+async def _maybe_gate_by_hitl(session_id: str, db, queue: asyncio.Queue, workflow_def: dict, current_step_idx: int, agent_id: str, content: str, hitl_loop: int = 0):
+    """Checks whether agent_id declares a humanFeedbackId. If so, pauses the workflow for
+    human review instead of advancing (current_step_index stays pinned to agent_id's step,
+    exactly like an AI_VALIDATOR retry does). Otherwise advances normally via _emit_advance_event.
+    Called after any AI_VALIDATOR gate has already passed (or wasn't configured) — this is what
+    implements 'AI validator first, then HITL' when an agent declares both."""
+    agent_config = await db["agents"].find_one({"agentId": agent_id})
+    hitl_agent_id = agent_config.get("humanFeedbackId") if agent_config else None
+
+    if not hitl_agent_id:
+        await _emit_advance_event(session_id, db, queue, workflow_def, current_step_idx, agent_id, content)
+        return
+
+    log.info(f"[{session_id}] Agent {agent_id} requires human review by {hitl_agent_id}. Pausing (loop {hitl_loop})...")
+
+    pause_event = {
+        "event_id": str(uuid.uuid4()), "publish_time": datetime.now(timezone.utc).isoformat(),
+        "attributes": {
+            "session_id": session_id, "owner_id": "local_user",
+            "current_step_index": str(current_step_idx),
+            "status": "AWAITING_INPUT",
+            "event_type": "MCP_PAUSE",
+            "hitl_pending_agent_id": hitl_agent_id,
+            "hitl_loop": str(hitl_loop),
+        },
+        "data": {
+            "workflow_definition": workflow_def,
+            "execution_context": {"source_outputs": {"source_agent_id": agent_id, "content": content}}
+        }
+    }
+    await _log_event_to_db(session_id, pause_event, db)
+
+
+async def _handle_hitl_response(event: dict, queue: asyncio.Queue):
+    """Resumes a workflow paused at a HITL_VALIDATOR gate. 'Approved' advances past the origin
+    agent's step (mirroring AI_VALIDATOR's PASS branch); 'Update' re-runs the origin agent with
+    the human's feedback injected and loops back to the same gate (mirroring the FAIL branch),
+    up to the origin agent's humanFeedbackConfig.maxLoops."""
+    session_id = event["session_id"]
+    origin_agent_id = event["origin_agent_id"]
+    current_step_idx = event["current_step_index"]
+    raw_response = event["response"]
+
+    db = get_db(os.environ.get("RAW_EVENTS_DB_NAME", "speakmanai_db"))
+    session_doc = await db["events_raw"].find_one({"session_id": session_id})
+    if not session_doc:
+        log.error(f"[{session_id}] Cannot resume HITL gate: session not found.")
+        return
+
+    events = session_doc.get("events", [])
+    workflow_def = events[0]["data"]["workflow_definition"]
+    steps = workflow_def.get("steps", [])
+
+    latest_event = events[-1]
+    hitl_loop = int(latest_event.get("attributes", {}).get("hitl_loop", "0"))
+    origin_content = latest_event["data"]["execution_context"]["source_outputs"]["content"]
+
+    try:
+        parsed = _extract_json(raw_response.strip())
+        status = parsed.get("status", "")
+        feedback = parsed.get("feedback", "")
+    except Exception:
+        # Tolerate a bare "Approved" / "Update" string in addition to structured JSON.
+        status = "Approved" if "approve" in raw_response.strip().lower() else "Update"
+        feedback = raw_response
+
+    origin_config = await db["agents"].find_one({"agentId": origin_agent_id}) or {}
+    max_loops = int(origin_config.get("humanFeedbackConfig", {}).get("maxLoops", 3))
+
+    if status == "Approved" or (hitl_loop + 1) >= max_loops:
+        if status != "Approved":
+            log.warning(f"[{session_id}] Max HITL loops hit for {origin_agent_id}. Advancing despite unresolved feedback.")
+        await _emit_advance_event(session_id, db, queue, workflow_def, current_step_idx, origin_agent_id, origin_content)
+        return
+
+    # "Update" — retry the origin agent with the human's feedback injected.
+    origin_step_type = steps[current_step_idx]["step_type"] if current_step_idx < len(steps) else None
+    is_delegated_step = origin_step_type == "MCP_PAUSE"
+    retry_status = "AWAITING_INPUT" if is_delegated_step else "IN_PROGRESS"
+
+    retry_event = {
+        "event_id": str(uuid.uuid4()), "publish_time": datetime.now(timezone.utc).isoformat(),
+        "attributes": {
+            "session_id": session_id, "owner_id": "local_user", "current_step_index": str(current_step_idx),
+            "status": retry_status,
+            "event_type": "MCP_PAUSE" if is_delegated_step else "WORKFLOW",
+            "hitl_retry": "true", "hitl_loop": str(hitl_loop + 1),
+        },
+        "data": {
+            "workflow_definition": workflow_def,
+            "execution_context": {
+                "source_outputs": {"source_agent_id": origin_agent_id, "content": origin_content},
+                "previous_output": origin_content,
+                "hitl_feedback": feedback,
+            }
+        }
+    }
+    await _log_event_to_db(session_id, retry_event, db)
+    if not is_delegated_step:
+        await queue.put({"action": "process_step", "session_id": session_id})
+
+
 async def process_local_event(event: dict, queue: asyncio.Queue):
     """Main dispatcher for the integrated local workflow engine."""
     action = event.get("action")
@@ -421,6 +559,8 @@ async def process_local_event(event: dict, queue: asyncio.Queue):
         await _handle_process_step(event, queue)
     elif action == "validate_step":
         await _handle_validate_step(event, queue)
+    elif action == "hitl_response":
+        await _handle_hitl_response(event, queue)
     else:
         log.warning(f"Unknown local engine action: {action}")
 
@@ -444,12 +584,12 @@ async def _handle_start(event: dict, queue: asyncio.Queue):
     
     # Extract the custom planner for this workflow, if one exists
     planner_agent = next((a for a in agents if a.get("agentType") == "AI_PLANNER"), None)
-    planner_system_prompt = planner_agent.get("systemPrompt", DEFAULT_PLANNER_SYSTEM_PROMPT) if planner_agent else DEFAULT_PLANNER_SYSTEM_PROMPT
-    planner_model = planner_agent.get("model", DEFAULT_MODEL) if planner_agent else DEFAULT_MODEL
+    planner_system_prompt = (planner_agent.get("systemPrompt") or DEFAULT_PLANNER_SYSTEM_PROMPT) if planner_agent else DEFAULT_PLANNER_SYSTEM_PROMPT
+    planner_model = (planner_agent.get("model") or DEFAULT_MODEL) if planner_agent else DEFAULT_MODEL
     planner_agent_id = planner_agent.get("agentId", "root_planner") if planner_agent else "root_planner"
     planner_exec_mode = planner_agent.get("executionMode", "auto") if planner_agent else "auto"
 
-    workflow_agents = [a for a in agents if a.get("agentType") not in ("AI_PLANNER", "AI_VALIDATOR")]
+    workflow_agents = [a for a in agents if a.get("agentType") not in ("AI_PLANNER", "AI_VALIDATOR", "HITL_VALIDATOR")]
     
     # --- EXECUTION MODE OVERRIDE ---
     # Dynamically rewrite agent types based on the global execution mode
@@ -630,79 +770,84 @@ async def _handle_resume(event: dict, queue: asyncio.Queue):
             next_step_index = 0
             steps = workflow_def.get("steps", [])
             is_final = len(steps) == 0
-            
+
             # Retroactively update the initial event in DB with the true parsed plan
             await db["events_raw"].update_one(
                 {"session_id": session_id, "events.attributes.current_step_index": "0"},
                 {"$set": {"events.$.data.workflow_definition": workflow_def}}
             )
-            
+
         except Exception as e:
             log.error(f"[{session_id}] Failed to parse CLI planner JSON: {e}")
             await db["events_raw"].update_one({"session_id": session_id}, {"$set": {"current_status": "FAILED"}})
             return
-            
+
         # Prevent the JSON DAG from overwriting the initial user prompt in latest_outputs
         agent_id = "root_planner_dag"
-    else:
-        # --- Validation Check (delegated/paused steps) ---
-        # Mirrors the check in _handle_process_step: a delegate agent's output
-        # never passes through that function, so it must be validated here instead.
-        agent_config = await db["agents"].find_one({"agentId": agent_id})
-        validator_agent_id = agent_config.get("validatorAgentId") if agent_config else None
-        if validator_agent_id:
-            latest_event = session_doc["events"][-1]
-            validation_loop = int(latest_event.get("attributes", {}).get("validation_loop", "0"))
-            log.info(f"[{session_id}] Delegated agent {agent_id} requires validation by {validator_agent_id}. Queueing validation...")
-            await queue.put({
-                "action": "validate_step",
+
+        next_step_type = steps[next_step_index]["step_type"] if not is_final else None
+        status = "COMPLETED" if is_final else ("AWAITING_INPUT" if next_step_type == "MCP_PAUSE" else "IN_PROGRESS")
+
+        resume_event = {
+            "event_id": str(uuid.uuid4()),
+            "publish_time": datetime.now(timezone.utc).isoformat(),
+            "attributes": {
                 "session_id": session_id,
-                "current_step_idx": current_step_index,
-                "workflow_def": workflow_def,
-                "agent_id": agent_id,
-                "validator_agent_id": validator_agent_id,
-                "content": content,
-                "validation_loop": validation_loop,
-                "source_outputs": {"source_agent_id": agent_id, "content": content}
-            })
-            return
-
-        next_step_index = current_step_index + 1
-        is_final = next_step_index >= len(steps)
-
-    next_step_type = steps[next_step_index]["step_type"] if not is_final else None
-    status = "COMPLETED" if is_final else ("AWAITING_INPUT" if next_step_type == "MCP_PAUSE" else "IN_PROGRESS")
-
-    resume_event = {
-        "event_id": str(uuid.uuid4()),
-        "publish_time": datetime.now(timezone.utc).isoformat(),
-        "attributes": {
-            "session_id": session_id,
-            "owner_id": "local_user",
-            "current_step_index": str(next_step_index) if not is_final else str(current_step_index),
-            "status": status,
-            "event_type": "MCP_PAUSE" if status == "AWAITING_INPUT" else "WORKFLOW"
-        },
-        "data": {
-            "workflow_definition": workflow_def,
-            "execution_context": {
-                "source_outputs": {
-                    "source_agent_id": agent_id,
-                    "content": content
+                "owner_id": "local_user",
+                "current_step_index": str(next_step_index) if not is_final else str(current_step_index),
+                "status": status,
+                "event_type": "MCP_PAUSE" if status == "AWAITING_INPUT" else "WORKFLOW"
+            },
+            "data": {
+                "workflow_definition": workflow_def,
+                "execution_context": {
+                    "source_outputs": {
+                        "source_agent_id": agent_id,
+                        "content": content
+                    }
                 }
             }
         }
-    }
 
-    await _log_event_to_db(session_id, resume_event, db)
+        await _log_event_to_db(session_id, resume_event, db)
+
+        log.info(f"[{session_id}] Resumed by local user (planner).")
+
+        if status == "COMPLETED":
+            await build_project_record(session_id, db)
+
+        if status == "IN_PROGRESS":
+            await queue.put({"action": "process_step", "session_id": session_id})
+        return
+
+    # --- Non-planner resume: a delegate agent's output arrived via submit_response ---
+    latest_event = session_doc["events"][-1]
+    hitl_loop = int(latest_event.get("attributes", {}).get("hitl_loop", "0"))
+
+    # --- Validation Check (delegated/paused steps) ---
+    # Mirrors the check in _handle_process_step: a delegate agent's output
+    # never passes through that function, so it must be validated here instead.
+    agent_config = await db["agents"].find_one({"agentId": agent_id})
+    validator_agent_id = agent_config.get("validatorAgentId") if agent_config else None
+    if validator_agent_id:
+        validation_loop = int(latest_event.get("attributes", {}).get("validation_loop", "0"))
+        log.info(f"[{session_id}] Delegated agent {agent_id} requires validation by {validator_agent_id}. Queueing validation...")
+        await queue.put({
+            "action": "validate_step",
+            "session_id": session_id,
+            "current_step_idx": current_step_index,
+            "workflow_def": workflow_def,
+            "agent_id": agent_id,
+            "validator_agent_id": validator_agent_id,
+            "content": content,
+            "validation_loop": validation_loop,
+            "hitl_loop": hitl_loop,
+            "source_outputs": {"source_agent_id": agent_id, "content": content}
+        })
+        return
 
     log.info(f"[{session_id}] Resumed by local user.")
-
-    if status == "COMPLETED":
-        await build_project_record(session_id, db)
-
-    if status == "IN_PROGRESS":
-        await queue.put({"action": "process_step", "session_id": session_id})
+    await _maybe_gate_by_hitl(session_id, db, queue, workflow_def, current_step_index, agent_id, content, hitl_loop)
 
 
 async def _handle_process_step(event: dict, queue: asyncio.Queue):
@@ -743,11 +888,13 @@ async def _handle_process_step(event: dict, queue: asyncio.Queue):
     model_name = agent_config.get("model", DEFAULT_MODEL)
     mime_type = agent_config.get("mimeType", "text/plain")
     
-    # --- Validation Retry Injection ---
+    # --- Validation / HITL Retry Injection ---
     exec_ctx = latest_event.get("data", {}).get("execution_context", {})
     validation_feedback = exec_ctx.get("validation_feedback")
+    hitl_feedback        = exec_ctx.get("hitl_feedback")
     previous_output     = exec_ctx.get("previous_output")
     validation_loop     = int(latest_event.get("attributes", {}).get("validation_loop", "0"))
+    hitl_loop           = int(latest_event.get("attributes", {}).get("hitl_loop", "0"))
 
     user_content = _compile_dependencies_context(agent_config, events)
     if validation_feedback:
@@ -760,6 +907,17 @@ async def _handle_process_step(event: dict, queue: asyncio.Queue):
             f"# VALIDATOR RESPONSE (Attempt {validation_loop})\n"
             f"Revise your previous output to address every issue raised below:\n"
             f"{validation_feedback}"
+        )
+    if hitl_feedback:
+        prior_block = (
+            f"\n\n# YOUR PREVIOUS OUTPUT (Attempt {hitl_loop})\n{previous_output}"
+            if previous_output else ""
+        )
+        user_content += (
+            f"{prior_block}\n\n"
+            f"# HUMAN REVIEWER RESPONSE (Attempt {hitl_loop})\n"
+            f"Revise your previous output to address the feedback below:\n"
+            f"{hitl_feedback}"
         )
 
     log.info(f"[{session_id}] Executing AI step {current_step_idx} with agent {agent_id} via {LLM_PROVIDER}...")
@@ -801,37 +959,13 @@ async def _handle_process_step(event: dict, queue: asyncio.Queue):
             "validator_agent_id": validator_agent_id,
             "content": llm_output,
             "validation_loop": validation_loop,
+            "hitl_loop": hitl_loop,
             "source_outputs": latest_event["data"]["execution_context"]["source_outputs"]
         })
         return
 
-    # Prepare next step
-    next_step_idx = current_step_idx + 1
-    is_final = next_step_idx >= len(steps)
-    next_step_type = steps[next_step_idx]["step_type"] if not is_final else None
-    
-    status = "COMPLETED" if is_final else ("AWAITING_INPUT" if next_step_type == "MCP_PAUSE" else "IN_PROGRESS")
-
-    new_event = {
-        "event_id": str(uuid.uuid4()),
-        "publish_time": datetime.now(timezone.utc).isoformat(),
-        "attributes": {
-            "session_id": session_id,
-            "owner_id": "local_user",
-            "current_step_index": str(next_step_idx) if not is_final else str(current_step_idx),
-            "status": status,
-            "event_type": "MCP_PAUSE" if status == "AWAITING_INPUT" else "WORKFLOW"
-        },
-        "data": {"workflow_definition": workflow_def, "execution_context": {"source_outputs": {"source_agent_id": agent_id, "content": llm_output}}}
-    }
-
-    await _log_event_to_db(session_id, new_event, db)
-    
-    if status == "COMPLETED":
-        await build_project_record(session_id, db)
-
-    if status == "IN_PROGRESS":
-        await queue.put({"action": "process_step", "session_id": session_id})
+    # No validator configured (or it already passed) — check the HITL gate before advancing.
+    await _maybe_gate_by_hitl(session_id, db, queue, workflow_def, current_step_idx, agent_id, llm_output, hitl_loop)
 
 
 async def _handle_validate_step(event: dict, queue: asyncio.Queue):
@@ -843,10 +977,13 @@ async def _handle_validate_step(event: dict, queue: asyncio.Queue):
     validator_agent_id = event["validator_agent_id"]
     content_to_validate = event["content"]
     validation_loop = event.get("validation_loop", 0)
+    hitl_loop = event.get("hitl_loop", 0)
     original_source_outputs = event["source_outputs"]
-    
+
     db = get_db(os.environ.get("RAW_EVENTS_DB_NAME", "speakmanai_db"))
-    
+    session_doc = await db["events_raw"].find_one({"session_id": session_id})
+    events = session_doc.get("events", []) if session_doc else []
+
     validator_config = await db["agents"].find_one({"agentId": validator_agent_id})
     if not validator_config:
         log.warning(f"[{session_id}] Validator {validator_agent_id} not found. Auto-passing.")
@@ -855,12 +992,17 @@ async def _handle_validate_step(event: dict, queue: asyncio.Queue):
         val_config = validator_config.get("validationConfig", {})
         max_loops = int(val_config.get("maxLoops", 3))
         min_score = float(val_config.get("minScore", 7.0))
-        
+
+        dep_context = _compile_dependencies_context(validator_config, events)
+        validator_user_content = f"# OUTPUT UNDER REVIEW ({agent_id})\n{content_to_validate}"
+        if dep_context:
+            validator_user_content += f"\n\n{dep_context}"
+
         log.info(f"[{session_id}] Running validation loop {validation_loop+1}/{max_loops} with {validator_agent_id}...")
         try:
             val_output = await _call_llm(
                 system_prompt=validator_config.get("systemPrompt", ""),
-                user_content=f"# CONTENT TO VALIDATE\n\n{content_to_validate}",
+                user_content=validator_user_content,
                 model_name=validator_config.get("model", DEFAULT_MODEL),
                 mime_type="application/json",
                 temperature=0.0
@@ -894,24 +1036,11 @@ async def _handle_validate_step(event: dict, queue: asyncio.Queue):
     if score >= min_score or (validation_loop + 1) >= max_loops:
         if score < min_score:
             log.warning(f"[{session_id}] Max validation loops hit. Advancing despite low score ({score}).")
-            
-        # PASS! Save the content and advance to the next workflow step
-        next_step_idx = current_step_idx + 1
-        is_final = next_step_idx >= len(steps)
-        next_step_type = steps[next_step_idx]["step_type"] if not is_final else None
-        
-        status = "COMPLETED" if is_final else ("AWAITING_INPUT" if next_step_type == "MCP_PAUSE" else "IN_PROGRESS")
-        
-        new_event = {
-            "event_id": str(uuid.uuid4()), "publish_time": datetime.now(timezone.utc).isoformat(),
-            "attributes": {"session_id": session_id, "owner_id": "local_user", "current_step_index": str(next_step_idx) if not is_final else str(current_step_idx), "status": status, "event_type": "MCP_PAUSE" if status == "AWAITING_INPUT" else "WORKFLOW"},
-            "data": {"workflow_definition": workflow_def, "execution_context": {"source_outputs": {"source_agent_id": agent_id, "content": content_to_validate}}}
-        }
-        await _log_event_to_db(session_id, new_event, db)
-        
-        if status == "COMPLETED": await build_project_record(session_id, db)
-        if status == "IN_PROGRESS": await queue.put({"action": "process_step", "session_id": session_id})
-            
+
+        # PASS! Check the HITL gate before advancing to the next workflow step —
+        # this is what makes "AI validator first, then HITL" work when both are configured.
+        await _maybe_gate_by_hitl(session_id, db, queue, workflow_def, current_step_idx, agent_id, content_to_validate, hitl_loop)
+
     else:
         # FAIL! Retry the exact same step with the feedback injected.
         # Delegated (MCP_PAUSE) steps must re-pause and wait for submit_response —
@@ -924,7 +1053,8 @@ async def _handle_validate_step(event: dict, queue: asyncio.Queue):
                 "session_id": session_id, "owner_id": "local_user", "current_step_index": str(current_step_idx),
                 "status": retry_status,
                 "event_type": "MCP_PAUSE" if is_delegated_step else "WORKFLOW",
-                "validation_retry": "true", "validation_loop": str(validation_loop + 1)
+                "validation_retry": "true", "validation_loop": str(validation_loop + 1),
+                "hitl_loop": str(hitl_loop),
             },
             "data": {
                 "workflow_definition": workflow_def,

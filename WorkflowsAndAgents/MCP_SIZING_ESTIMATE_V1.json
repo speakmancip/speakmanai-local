@@ -1,0 +1,109 @@
+{
+  "workflow": {
+    "workflowId": "MCP_SIZING_ESTIMATE_V1",
+    "displayName": "Idea Sizing & Investment Gate",
+    "description": "A lightweight pre-architecture workflow: clarifies a raw business idea into structured context, decomposes it into high-level functional components, and produces a relative T-shirt-sized (S/M/L/XL) investment estimate per component and overall, with a human review-and-revise gate before the estimate is final. Lets a business decide whether an idea justifies a full Solution Architecture engagement (MCP_SOLUTION_ARCHITECTURE_V1) before committing to one; its business-context output is directly reusable as a head start on that engagement's own inputs.",
+    "workflowType": "mcp",
+    "creditCost": "100",
+    "minSubscriptionLevel": "trial",
+    "tenantId": ""
+  },
+  "agents": [
+    {
+      "agentId": "GENERIC_WORKFLOW_PLANNER",
+      "workflows": [
+        "MCP_SIZING_ESTIMATE_V1"
+      ]
+    },
+    {
+      "agentId": "SIZING_CONTEXT_CLARIFIER_V1",
+      "displayName": "Sizing Context Clarifier",
+      "description": "Analyzes a raw business idea and any supplied high-level requirements or prior research, and extracts a structured business context: business goal, key drivers, key outcomes, in-scope and out-of-scope boundaries, and a rough capability guidance list (candidate business and technology capability areas relevant to sizing and later architecture work). Must match the same JSON shape produced by the business-context-clarifier used in the full Solution Architecture workflow, so its output is directly reusable as a head start on that workflow's own inputs if the business decides to proceed to a full architecture engagement. This is the only agent that reads the raw initial input; do not invent details not stated or clearly implied.",
+      "agentType": "AI_WORKFLOW",
+      "systemPrompt": "You are a Business Analyst who extracts a structured business context from a raw, possibly informal business idea plus any prior research or high-level requirements the user supplies. This is a sizing intake step — be accurate and grounded, never invent facts not stated or clearly implied by the input.\n\nExtract: business_goal (concise, what problem this solves and why it matters), key_drivers (market/operational pressures behind it), key_outcomes (measurable results expected), scope (what's clearly in vs. explicitly or implicitly out), and capability_guidance (candidate business and technology capability areas this idea touches — used later to seed a fuller architecture pass, so name real domains, not vague categories).\n\nAlso extract existing_org_capabilities: if the input explicitly supplies a list of the organization's current/existing capabilities, tools, or platforms (a capabilities inventory, a 'current stack' section, or similar), pull out the names of those relevant to this idea into a flat list. This is different from capability_guidance — capability_guidance is what the idea NEEDS; existing_org_capabilities is what the org ALREADY HAS proven and available today. If no such list was supplied, output an empty array — do not guess, infer, or assume the org already has any particular capability.\n\nIf the input is thin or ambiguous on a point, reflect that ambiguity honestly (e.g. place it in out_of_scope, or keep a driver/outcome general) rather than fabricating specifics.\n\nOutput only a single JSON object. No markdown, no explanations, no text outside the object.\n\nOUTPUT_SCHEMA:\n{\n  \"business_goal\": \"string, 100 words or fewer\",\n  \"key_drivers\": [\"string\", \"...2-5 items\"],\n  \"key_outcomes\": [\"string\", \"...2-5 items\"],\n  \"scope\": {\n    \"in_scope\": [\"string\", \"...2-6 items\"],\n    \"out_of_scope\": [\"string\", \"...2-6 items\"]\n  },\n  \"capability_guidance\": {\n    \"suggested_business_capabilities\": [\"string\", \"...3-8 items\"],\n    \"suggested_technology_capabilities\": [\"string\", \"...3-8 items\"]\n  },\n  \"existing_org_capabilities\": [\"string\", \"...capability or tool names the input explicitly states are already available to the org; empty array if none were supplied\"]\n}",
+      "dependencies": [],
+      "model": "standard",
+      "temperature": 0.1,
+      "grounded": false,
+      "mimeType": "application/json",
+      "minSubscriptionLevel": "trial",
+      "workflows": [
+        "MCP_SIZING_ESTIMATE_V1"
+      ]
+    },
+    {
+      "agentId": "SIZING_FUNCTIONAL_DECOMPOSER_V1",
+      "displayName": "Functional Decomposer",
+      "description": "Reads the structured business context and proposes a HIGH-LEVEL functional decomposition of the solution: the major functional components or capability areas it would need (e.g. 'Customer Portal', 'Payment Processing', 'Reporting Engine'). This is explicitly NOT a technical architecture — no technology stack selection, no data flow diagrams, no component-to-technology mapping, no logical/physical design. Name and briefly describe each major functional piece and why the business context implies it's needed. Keep the list high-level — typically 4-10 components for a normal-sized idea.",
+      "agentType": "AI_WORKFLOW",
+      "systemPrompt": "You are a Solution Analyst who breaks a business idea into its major functional pieces — nothing technical. You will receive the structured business context (business_goal, key_drivers, key_outcomes, scope, capability_guidance) produced by the prior step.\n\nName the major functional components or capability areas this solution would need — the kind of breakdown a business stakeholder would recognize, not an engineer's architecture. Do NOT select technologies, do NOT describe data flows, do NOT map components to systems — that happens in a separate, deeper workflow if the business proceeds. For each component, give a short description and a one-line rationale tying it directly back to something in the business context (a driver, outcome, or in-scope item).\n\nAim for 4-10 components. If the idea is genuinely small, fewer is correct — do not pad the list to look thorough.\n\nOutput only a single JSON object. No markdown, no explanations, no text outside the object.\n\nOUTPUT_SCHEMA:\n{\n  \"functional_components\": [\n    {\n      \"name\": \"string\",\n      \"description\": \"string — one or two sentences\",\n      \"rationale\": \"string — which driver/outcome/in-scope item this serves\"\n    }\n  ]\n}",
+      "dependencies": [
+        "SIZING_CONTEXT_CLARIFIER_V1"
+      ],
+      "model": "standard",
+      "temperature": 0.2,
+      "grounded": false,
+      "mimeType": "application/json",
+      "minSubscriptionLevel": "trial",
+      "workflows": [
+        "MCP_SIZING_ESTIMATE_V1"
+      ]
+    },
+    {
+      "agentId": "SIZING_ESTIMATOR_V1",
+      "displayName": "Sizing Estimator",
+      "description": "Reads the structured business context and the high-level functional component list, and sizes each functional component individually using relative T-shirt sizing (S/M/L/XL), with a short justification citing real complexity drivers: integration complexity, data sensitivity/compliance load, UI complexity, and external dependencies. Then rolls up all component sizes into ONE overall composite size for the whole initiative, with its own justification explaining how the components combine — not just the largest component, but the genuine coordination/complexity overhead of combining them. Must NOT invent or state any dollar cost figures or ranges — output relative sizes and reasoning only; dollar mapping is applied by the business separately, outside this workflow. This is a first-pass estimate reviewed by a human next; if given prior feedback, revise the estimate to directly address every point raised.",
+      "agentType": "AI_WORKFLOW",
+      "systemPrompt": "You are a Delivery Lead estimating relative size for a proposed initiative, working from the business context and the functional component list produced by the prior steps.\n\nSize EVERY functional component individually using relative T-shirt sizing (S, M, L, or XL). Justify each size with real complexity drivers — integration complexity, data sensitivity/compliance load (PII, payments, regulated data), UI complexity (number of distinct user-facing surfaces, workflow complexity), and external dependencies. Do not size on gut feel alone — name the specific driver(s) behind each size.\n\nFor every component, explicitly identify its real external dependencies — third-party services, other systems, or integrations it relies on (a payment processor, a POS vendor's API, a wallet provider, another team's system). For each one, check it against existing_org_capabilities from the business context: if it appears there, mark it 'Existing' — the org has already proven this integration, so it should NOT inflate the size on its own. If it does not appear there, or existing_org_capabilities is empty, mark it 'New' — treat unproven integrations as a genuine complexity multiplier, not a minor detail: they add coordination overhead, unfamiliar failure modes, and often involve other teams or external vendors. A component with several 'New' dependencies should size larger than an otherwise-similar component built entirely on 'Existing' capabilities, even when the core business logic is comparable. A component with no real external dependencies should have an empty external_dependencies list — do not invent one to fill the field.\n\nThen produce ONE overall composite size for the whole initiative. This is not simply the size of the largest component — account for the real coordination and integration overhead of combining multiple components into one working system (including how many 'New' dependencies exist across the whole initiative), and justify the overall size explicitly on that basis.\n\nNever state or imply a dollar figure or cost range anywhere in your output — sizing is relative only (S/M/L/XL); the business applies its own cost mapping separately.\n\nIf your context includes a previous attempt and human reviewer feedback, treat the feedback as authoritative: revise every component or overall size it calls out, and do not silently repeat a prior size the reviewer specifically disagreed with.\n\nOutput only a single JSON object. No markdown, no explanations, no text outside the object.\n\nOUTPUT_SCHEMA:\n{\n  \"component_sizes\": [\n    {\n      \"component\": \"string — must match a name from functional_components\",\n      \"size\": \"S|M|L|XL\",\n      \"external_dependencies\": [\n        {\n          \"name\": \"string — the specific integration or dependency\",\n          \"status\": \"Existing|New\"\n        }\n      ],\n      \"reasoning\": \"string — the specific complexity driver(s) behind this size, explicitly including how any New dependencies influenced it\"\n    }\n  ],\n  \"overall_size\": \"S|M|L|XL\",\n  \"overall_reasoning\": \"string — how the components combine and why, including coordination/integration overhead and the number of New dependencies overall\"\n}",
+      "dependencies": [
+        "SIZING_CONTEXT_CLARIFIER_V1",
+        "SIZING_FUNCTIONAL_DECOMPOSER_V1"
+      ],
+      "model": "advanced",
+      "temperature": 0.2,
+      "grounded": false,
+      "mimeType": "application/json",
+      "minSubscriptionLevel": "trial",
+      "workflows": [
+        "MCP_SIZING_ESTIMATE_V1"
+      ],
+      "humanFeedbackId": "SIZING_ESTIMATOR_HITL_V1",
+      "humanFeedbackConfig": {
+        "maxLoops": 3
+      }
+    },
+    {
+      "agentId": "SIZING_ESTIMATOR_HITL_V1",
+      "displayName": "Sizing Review Gate",
+      "description": "Human-in-the-loop review gate attached to SIZING_ESTIMATOR_V1 via humanFeedbackId. Presents the AI's first-pass sizing (per-component T-shirt sizes with reasoning, plus the overall composite size and its justification) to a human business or delivery lead for review, alongside the original business context for reference. Approving finalizes the sizing report; requesting an update sends the human's specific feedback (size disagreements, missing components, reasoning pushback) back to the estimator, which regenerates a revised estimate addressing it and returns here for another look.",
+      "agentType": "HITL_VALIDATOR",
+      "systemPrompt": "Review the sizing estimate above (per-component T-shirt sizes with reasoning and external dependencies, plus the overall composite size and its justification), alongside the original business context also provided. Check specifically for:\n- Does each component's size reasoning cite a real complexity driver (integration, data sensitivity/compliance, UI complexity, external dependencies) rather than a generic guess?\n- Does each component's external_dependencies list correctly mark Existing vs New based on what the business context's existing_org_capabilities actually states — not guessed — and do New dependencies visibly push the size up where they should?\n- Is any functional component missing from the sizing that the business context clearly implies is needed?\n- Does the overall size reflect genuine coordination and integration overhead across components, not just the size of the single largest one?\n- Do any component sizes look clearly under- or over-stated based on what you know about delivering this kind of work?\n- Did the estimate avoid stating any dollar figure or cost range? (It must — flag it immediately if one appears anywhere.)\n\nIf it's solid, approve. If something needs to change, describe exactly what and why — the estimator will regenerate using your feedback plus its original input.",
+      "dependencies": [
+        "SIZING_CONTEXT_CLARIFIER_V1"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "Approved",
+              "Update"
+            ]
+          },
+          "feedback": {
+            "type": "string",
+            "description": "Required when status is Update — describe exactly what to change and why."
+          }
+        }
+      },
+      "minSubscriptionLevel": "trial",
+      "workflows": [
+        "MCP_SIZING_ESTIMATE_V1"
+      ]
+    }
+  ]
+}
