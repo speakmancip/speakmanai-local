@@ -27,7 +27,7 @@
       "minSubscriptionLevel": "developer",
       "dependencies": [
         "CLAUDE_WORKFLOW_ANALYST_V1",
-        "CLAUDE_GENERIC_WORKFLOW_PLANNER"
+        "GENERIC_WORKFLOW_PLANNER"
       ],
       "workflows": [
         "CLAUDE_WORKFLOW_CREATOR_V1"
