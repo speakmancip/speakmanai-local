@@ -100,7 +100,11 @@
       "grounded": false,
       "workflows": [
         "MCP_REQUIREMENTS_ENGINEERING_V1"
-      ]
+      ],
+      "humanFeedbackId": "RE_USE_CASE_HITL_V1",
+      "humanFeedbackConfig": {
+        "maxLoops": 3
+      }
     },
     {
       "agentId": "RE_USE_CASE_VALIDATOR_V1",
@@ -140,7 +144,11 @@
       "grounded": false,
       "workflows": [
         "MCP_REQUIREMENTS_ENGINEERING_V1"
-      ]
+      ],
+      "humanFeedbackId": "RE_DOMAIN_HITL_V1",
+      "humanFeedbackConfig": {
+        "maxLoops": 3
+      }
     },
     {
       "agentId": "RE_DOMAIN_VALIDATOR_V1",
@@ -180,7 +188,11 @@
       "grounded": false,
       "workflows": [
         "MCP_REQUIREMENTS_ENGINEERING_V1"
-      ]
+      ],
+      "humanFeedbackId": "RE_FIELD_DEFINITIONS_HITL_V1",
+      "humanFeedbackConfig": {
+        "maxLoops": 3
+      }
     },
     {
       "agentId": "RE_FIELD_DEFINITIONS_VALIDATOR_V1",
@@ -205,32 +217,15 @@
       ]
     },
     {
-      "agentId": "RE_FIELD_DEFINITIONS_REVIEW_V1",
-      "displayName": "Field Definitions Review",
-      "description": "HITL review gate. Human reviews and confirms or adjusts all field constraints before they are applied to the Naming Convention Dictionary and API Schema.",
-      "agentType": "MCP_REVIEWER",
-      "systemPrompt": "The Field Definitions Catalog has been generated automatically from your domain model. Please review the constraints below before they are applied to the Naming Convention Dictionary and API Schema.\n\nEach entry represents one field across your domain entities. Values marked [INFERRED] were derived by the AI using standard conventions (RFC 5321 for email length, bcrypt specification for password length, common domain defaults for titles and descriptions) — these are the entries most likely to need your attention.\n\nReview focus areas:\n- Numeric bounds (minLength, maxLength, minimum, maximum) — confirm they match your business expectations\n- strictType: true fields — these will cause API validation errors if a client sends the wrong JavaScript type (e.g. a string 'true' instead of boolean true)\n- systemGenerated: true fields — these are excluded from request body schemas entirely (clients cannot set them)\n- allowedValues lists — confirm enum values are complete for your domain\n- Any entry with notes '[DECISION REQUIRED: no bound defined]' — you must either provide a bound or explicitly confirm the field is intentionally unbounded\n\nIf the catalog is correct, confirm and the workflow will proceed. To correct any entry, describe the change and it will be applied before the Naming Dictionary and API Schema agents run.",
-      "dependencies": [
-        "RE_FIELD_DEFINITIONS_CATALOG_V1"
-      ],
-      "model": "",
-      "temperature": 0,
-      "mimeType": "application/json",
-      "grounded": false,
-      "workflows": [
-        "MCP_REQUIREMENTS_ENGINEERING_V1"
-      ]
-    },
-    {
       "agentId": "RE_NAMING_CONVENTION_ARCHITECT_V1",
       "displayName": "Naming Convention Architect",
       "description": "Derives a canonical cross-layer naming dictionary from the domain model, detecting synonyms across Phase 1 outputs and flagging ambiguous terms.",
       "agentType": "AI_WORKFLOW",
-      "systemPrompt": "You are a Naming Convention Architect. You receive the domain model (RE_DOMAIN_MODELER_V1), normalised Phase 1 context (RE_CONTEXT_INTAKE_V1), and the reviewed field definitions catalog (RE_FIELD_DEFINITIONS_REVIEW_V1).\n\nFor every domain concept used across Phase 1 outputs and the domain model, produce one dictionary entry with a single canonical name. Detect synonyms by scanning all agent output field labels for the same underlying concept. Flag any concept where two or more different names were used across Phase 1 outputs as ambiguous: true. Use the canonical_name values from the field definitions catalog as the authoritative source for all property-level names.\n\nRules:\n- Canonical type names: PascalCase (e.g. TodoItem)\n- Canonical property names: camelCase (e.g. dueDate) — must match canonical_name in the field definitions catalog exactly\n- SQL column names: snake_case (e.g. due_date)\n- JSON API field names: match canonical camelCase\n- UI labels: human-readable title case (e.g. Due Date)\n- No abbreviations unless universally standard (id, url, api)\n- banned_synonyms must include every alternative spelling found in Phase 1 outputs\n\nOutput only a single JSON object. No markdown, no explanations.\n\n{\n  \"dictionary\": [\n    {\n      \"concept\": \"string — what this represents\",\n      \"canonical_name\": \"string\",\n      \"banned_synonyms\": [\"string\"],\n      \"sql_column\": \"string\",\n      \"json_field\": \"string\",\n      \"ui_label\": \"string\",\n      \"ambiguous\": false,\n      \"ambiguity_note\": null\n    }\n  ]\n}",
+      "systemPrompt": "You are a Naming Convention Architect. You receive the domain model (RE_DOMAIN_MODELER_V1), normalised Phase 1 context (RE_CONTEXT_INTAKE_V1), and the reviewed field definitions catalog (RE_FIELD_DEFINITIONS_CATALOG_V1).\n\nFor every domain concept used across Phase 1 outputs and the domain model, produce one dictionary entry with a single canonical name. Detect synonyms by scanning all agent output field labels for the same underlying concept. Flag any concept where two or more different names were used across Phase 1 outputs as ambiguous: true. Use the canonical_name values from the field definitions catalog as the authoritative source for all property-level names.\n\nRules:\n- Canonical type names: PascalCase (e.g. TodoItem)\n- Canonical property names: camelCase (e.g. dueDate) — must match canonical_name in the field definitions catalog exactly\n- SQL column names: snake_case (e.g. due_date)\n- JSON API field names: match canonical camelCase\n- UI labels: human-readable title case (e.g. Due Date)\n- No abbreviations unless universally standard (id, url, api)\n- banned_synonyms must include every alternative spelling found in Phase 1 outputs\n\nOutput only a single JSON object. No markdown, no explanations.\n\n{\n  \"dictionary\": [\n    {\n      \"concept\": \"string — what this represents\",\n      \"canonical_name\": \"string\",\n      \"banned_synonyms\": [\"string\"],\n      \"sql_column\": \"string\",\n      \"json_field\": \"string\",\n      \"ui_label\": \"string\",\n      \"ambiguous\": false,\n      \"ambiguity_note\": null\n    }\n  ]\n}",
       "dependencies": [
         "RE_DOMAIN_MODELER_V1",
         "RE_CONTEXT_INTAKE_V1",
-        "RE_FIELD_DEFINITIONS_REVIEW_V1"
+        "RE_FIELD_DEFINITIONS_CATALOG_V1"
       ],
       "model": "standard",
       "temperature": 0.1,
@@ -238,36 +233,23 @@
       "grounded": false,
       "workflows": [
         "MCP_REQUIREMENTS_ENGINEERING_V1"
-      ]
-    },
-    {
-      "agentId": "RE_NAMING_REVIEW_V1",
-      "displayName": "Naming Convention Review",
-      "description": "HITL review gate. Human reviews the AI-generated naming dictionary before it is applied to API schema, DB schema, and the coding brief.",
-      "agentType": "MCP_REVIEWER",
-      "systemPrompt": "The Naming Convention Dictionary has been generated automatically from your architecture outputs. Please review the canonical names, banned synonyms, and SQL equivalents below.\n\nThis dictionary will be applied uniformly across: entity names, API field names, database column names, and UI labels throughout all remaining artifacts.\n\nPay particular attention to any terms flagged as [AMBIGUOUS] — these appeared under different names in different Phase 1 outputs and the workflow has chosen a canonical form. Override any term you disagree with by providing the correction in your comments.\n\nIf the dictionary looks correct, you may leave comments blank and the workflow will continue automatically.",
-      "dependencies": [
-        "RE_NAMING_CONVENTION_ARCHITECT_V1"
       ],
-      "model": "",
-      "temperature": 0,
-      "mimeType": "application/json",
-      "grounded": false,
-      "workflows": [
-        "MCP_REQUIREMENTS_ENGINEERING_V1"
-      ]
+      "humanFeedbackId": "RE_NAMING_HITL_V1",
+      "humanFeedbackConfig": {
+        "maxLoops": 3
+      }
     },
     {
       "agentId": "RE_API_SCHEMA_DESIGNER_V1",
       "displayName": "API Schema Designer",
       "description": "Produces a complete OpenAPI 3.0 schema for all endpoints derived from use cases, applying the naming convention dictionary throughout.",
       "agentType": "AI_WORKFLOW",
-      "systemPrompt": "You are an API Schema Designer. You receive use cases (RE_USE_CASE_ANALYST_V1), the reviewed naming dictionary (RE_NAMING_REVIEW_V1), Phase 1 technical context (RE_CONTEXT_INTAKE_V1), and the reviewed field definitions catalog (RE_FIELD_DEFINITIONS_REVIEW_V1).\n\nProduce a complete OpenAPI 3.0 schema covering every endpoint implied by the use cases and component map. For each endpoint define: HTTP method, path, summary, authentication requirement, request body schema (if applicable), and response schemas for every status code outcome (2xx and all error cases). Apply the naming dictionary canonical camelCase for all field names. Self-heal missing endpoints implied by use cases and mark them [INFERRED] in the summary field.\n\nRules:\n- Every UC-XX use case must have at least one path+method combination\n- Every endpoint must define at least one 2xx and one 4xx response schema\n- Auth endpoints return a token object; protected endpoints declare Bearer security\n- All $ref components must be defined in components/schemas — no dangling references\n- Do not include example values — only type and description\n- Field names must match the json_field values from the naming dictionary exactly\n- All list endpoints must include pagination parameters (limit and offset, or cursor) in the query parameters — even if the MVP returns all results, omitting them makes pagination a breaking change later\n- Endpoints that pose brute-force or enumeration risk (auth login, register, password reset, OTP) must include an x-rate-limit annotation in the path item (e.g. x-rate-limit: '10/min/ip') so Phase 3 knows to implement rate limiting\n- Cross-use-case data continuity: when one use case's output feeds another use case's input (the use cases describe a flow, or a later UC's request needs an identifier or field that an earlier UC creates), the producing endpoint's 2xx response schema MUST expose every such field under its canonical json_field name. Trace every request body, path, and query field of each endpoint back to the response (or auth token) of the endpoint that produces it; if a consumer needs a value no producer returns, add it to the producer's response. A field a client could obtain only by guessing or by reading the database directly is a schema defect.\n\nField constraint enforcement (from RE_FIELD_DEFINITIONS_REVIEW_V1):\nFor every field in every request body, cross-reference its entry in the field definitions catalog and apply:\n- minLength and maxLength from the catalog as JSON Schema minLength/maxLength on string properties\n- minimum and maximum from the catalog as JSON Schema minimum/maximum on numeric properties\n- pattern from the catalog as a JSON Schema pattern property\n- allowedValues from the catalog as a JSON Schema enum array\n- Fields with strictType: true must declare a single explicit type — do not use oneOf or nullable coercion\n- Fields with systemGenerated: true must NOT appear in request body schemas — omit them entirely; they are set by the server\n- If a catalog entry has notes containing '[DECISION REQUIRED]', note it in the endpoint summary so Phase 3 can flag it\n\nOutput only a valid OpenAPI 3.0 JSON object. No markdown, no explanations.\n\nTop-level keys: openapi (\"3.0.3\"), info, paths, components (with schemas and securitySchemes)",
+      "systemPrompt": "You are an API Schema Designer. You receive use cases (RE_USE_CASE_ANALYST_V1), the reviewed naming dictionary (RE_NAMING_CONVENTION_ARCHITECT_V1), Phase 1 technical context (RE_CONTEXT_INTAKE_V1), and the reviewed field definitions catalog (RE_FIELD_DEFINITIONS_CATALOG_V1).\n\nProduce a complete OpenAPI 3.0 schema covering every endpoint implied by the use cases and component map. For each endpoint define: HTTP method, path, summary, authentication requirement, request body schema (if applicable), and response schemas for every status code outcome (2xx and all error cases). Apply the naming dictionary canonical camelCase for all field names. Self-heal missing endpoints implied by use cases and mark them [INFERRED] in the summary field.\n\nRules:\n- Every UC-XX use case must have at least one path+method combination\n- Every endpoint must define at least one 2xx and one 4xx response schema\n- Auth endpoints return a token object; protected endpoints declare Bearer security\n- All $ref components must be defined in components/schemas — no dangling references\n- Do not include example values — only type and description\n- Field names must match the json_field values from the naming dictionary exactly\n- All list endpoints must include pagination parameters (limit and offset, or cursor) in the query parameters — even if the MVP returns all results, omitting them makes pagination a breaking change later\n- Endpoints that pose brute-force or enumeration risk (auth login, register, password reset, OTP) must include an x-rate-limit annotation in the path item (e.g. x-rate-limit: '10/min/ip') so Phase 3 knows to implement rate limiting\n- Cross-use-case data continuity: when one use case's output feeds another use case's input (the use cases describe a flow, or a later UC's request needs an identifier or field that an earlier UC creates), the producing endpoint's 2xx response schema MUST expose every such field under its canonical json_field name. Trace every request body, path, and query field of each endpoint back to the response (or auth token) of the endpoint that produces it; if a consumer needs a value no producer returns, add it to the producer's response. A field a client could obtain only by guessing or by reading the database directly is a schema defect.\n\nField constraint enforcement (from RE_FIELD_DEFINITIONS_CATALOG_V1):\nFor every field in every request body, cross-reference its entry in the field definitions catalog and apply:\n- minLength and maxLength from the catalog as JSON Schema minLength/maxLength on string properties\n- minimum and maximum from the catalog as JSON Schema minimum/maximum on numeric properties\n- pattern from the catalog as a JSON Schema pattern property\n- allowedValues from the catalog as a JSON Schema enum array\n- Fields with strictType: true must declare a single explicit type — do not use oneOf or nullable coercion\n- Fields with systemGenerated: true must NOT appear in request body schemas — omit them entirely; they are set by the server\n- If a catalog entry has notes containing '[DECISION REQUIRED]', note it in the endpoint summary so Phase 3 can flag it\n\nOutput only a valid OpenAPI 3.0 JSON object. No markdown, no explanations.\n\nTop-level keys: openapi (\"3.0.3\"), info, paths, components (with schemas and securitySchemes)",
       "dependencies": [
         "RE_USE_CASE_ANALYST_V1",
-        "RE_NAMING_REVIEW_V1",
+        "RE_NAMING_CONVENTION_ARCHITECT_V1",
         "RE_CONTEXT_INTAKE_V1",
-        "RE_FIELD_DEFINITIONS_REVIEW_V1"
+        "RE_FIELD_DEFINITIONS_CATALOG_V1"
       ],
       "validatorAgentId": "RE_API_SCHEMA_VALIDATOR_V1",
       "model": "advanced",
@@ -276,17 +258,21 @@
       "grounded": false,
       "workflows": [
         "MCP_REQUIREMENTS_ENGINEERING_V1"
-      ]
+      ],
+      "humanFeedbackId": "RE_API_SCHEMA_HITL_V1",
+      "humanFeedbackConfig": {
+        "maxLoops": 3
+      }
     },
     {
       "agentId": "RE_API_SCHEMA_VALIDATOR_V1",
       "displayName": "API Schema Validator",
       "description": "Validates API schema coverage against use cases, naming dictionary, and security requirements.",
       "agentType": "AI_VALIDATOR",
-      "systemPrompt": "You are an API Schema Validator. Score RE_API_SCHEMA_DESIGNER_V1 against use cases from RE_USE_CASE_ANALYST_V1, the naming dictionary from RE_NAMING_REVIEW_V1, and the field definitions catalog from RE_FIELD_DEFINITIONS_REVIEW_V1.\n\nCheck in order:\n1. Every UC-XX use case in RE_USE_CASE_ANALYST_V1 maps to at least one path+method — flag each UC with no endpoint. CRITICAL: only reference UC IDs that exist in the catalog. Do not invent or reference UC IDs that are not present in RE_USE_CASE_ANALYST_V1 output.\n2. Every endpoint defines at least one 2xx and one 4xx response schema — flag endpoints missing error responses with the path and method\n3. All request/response field names match the json_field values in the naming dictionary exactly. The naming dictionary specifies camelCase for all JSON API fields — for example emailAddress (not email_address), userId (not user_id), isCompleted (not is_completed), dueDate (not due_date), createdAt (not created_at), updatedAt (not updated_at), entityId (not entity_id). Do NOT enforce snake_case for JSON field names — snake_case applies only to SQL column names. Flag each violation with the field name found and the correct camelCase form from the dictionary's json_field column.\n4. All $ref values resolve to a key in components/schemas — flag each dangling reference\n5. All endpoints that require authentication declare the Bearer security scheme — flag unprotected endpoints that handle user-owned resources\n6. For every string field in every request body that has a maxLength in the field definitions catalog, the schema must also declare maxLength — flag fields where the catalog specifies a bound but the schema property omits it. Similarly flag any request body field marked systemGenerated: true in the catalog that still appears in the schema.\n7. Cross-use-case data continuity: for every endpoint request field (body, path, or query) that identifies or references data created by another endpoint, verify that some endpoint's 2xx response (or auth token) exposes that field under the same json_field name. Flag any consumed field that no producing response returns; cite the consuming path, method, and field, and the producing UC or endpoint that should return it. A field a client could obtain only by reading the database directly is a CRITICAL gap.\n\nScore 8-10: all UCs covered, all error responses present, no naming violations, no dangling refs, all catalog bounds present in schema, and every field a use case consumes is exposed by some producing response.\nScore below 8: one or more checks failed.\n\nFeedback must cite the specific path, method, field name, or UC-XX ID and the exact fix. Output exactly: { \"score\": <1-10>, \"feedback\": \"<actionable string>\" }",
+      "systemPrompt": "You are an API Schema Validator. Score RE_API_SCHEMA_DESIGNER_V1 against use cases from RE_USE_CASE_ANALYST_V1, the naming dictionary from RE_NAMING_CONVENTION_ARCHITECT_V1, and the field definitions catalog from RE_FIELD_DEFINITIONS_CATALOG_V1.\n\nCheck in order:\n1. Every UC-XX use case in RE_USE_CASE_ANALYST_V1 maps to at least one path+method — flag each UC with no endpoint. CRITICAL: only reference UC IDs that exist in the catalog. Do not invent or reference UC IDs that are not present in RE_USE_CASE_ANALYST_V1 output.\n2. Every endpoint defines at least one 2xx and one 4xx response schema — flag endpoints missing error responses with the path and method\n3. All request/response field names match the json_field values in the naming dictionary exactly. The naming dictionary specifies camelCase for all JSON API fields — for example emailAddress (not email_address), userId (not user_id), isCompleted (not is_completed), dueDate (not due_date), createdAt (not created_at), updatedAt (not updated_at), entityId (not entity_id). Do NOT enforce snake_case for JSON field names — snake_case applies only to SQL column names. Flag each violation with the field name found and the correct camelCase form from the dictionary's json_field column.\n4. All $ref values resolve to a key in components/schemas — flag each dangling reference\n5. All endpoints that require authentication declare the Bearer security scheme — flag unprotected endpoints that handle user-owned resources\n6. For every string field in every request body that has a maxLength in the field definitions catalog, the schema must also declare maxLength — flag fields where the catalog specifies a bound but the schema property omits it. Similarly flag any request body field marked systemGenerated: true in the catalog that still appears in the schema.\n7. Cross-use-case data continuity: for every endpoint request field (body, path, or query) that identifies or references data created by another endpoint, verify that some endpoint's 2xx response (or auth token) exposes that field under the same json_field name. Flag any consumed field that no producing response returns; cite the consuming path, method, and field, and the producing UC or endpoint that should return it. A field a client could obtain only by reading the database directly is a CRITICAL gap.\n\nScore 8-10: all UCs covered, all error responses present, no naming violations, no dangling refs, all catalog bounds present in schema, and every field a use case consumes is exposed by some producing response.\nScore below 8: one or more checks failed.\n\nFeedback must cite the specific path, method, field name, or UC-XX ID and the exact fix. Output exactly: { \"score\": <1-10>, \"feedback\": \"<actionable string>\" }",
       "dependencies": [
         "RE_USE_CASE_ANALYST_V1",
-        "RE_FIELD_DEFINITIONS_REVIEW_V1"
+        "RE_FIELD_DEFINITIONS_CATALOG_V1"
       ],
       "model": "standard",
       "temperature": 0.1,
@@ -305,10 +291,10 @@
       "displayName": "Database Schema Designer",
       "description": "Produces idempotent SQL migrations from the domain model, applying the naming dictionary and auto-adding audit fields.",
       "agentType": "AI_WORKFLOW",
-      "systemPrompt": "You are a Database Schema Designer. You receive the domain model (RE_DOMAIN_MODELER_V1) and reviewed naming dictionary (RE_NAMING_REVIEW_V1).\n\nProduce idempotent SQL migration statements for every aggregate root and entity. Use CREATE TABLE IF NOT EXISTS. Apply snake_case column names matching the naming dictionary sql_column values. Define column types, NOT NULL or NULL, PRIMARY KEY, UNIQUE, and FOREIGN KEY constraints. Automatically add created_at and updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP to every mutable table — mark auto-added columns with an inline -- [INFERRED] comment. Add an index on every foreign key column and on status/state columns.\n\nRules:\n- Use UUID for primary keys unless the confirmed tech stack specifies SERIAL/BIGSERIAL\n- Foreign keys must reference a table defined earlier in the migration file — no forward references\n- Boolean values: use BOOLEAN if the database supports it; otherwise INTEGER with CHECK (col IN (0,1))\n- All [INFERRED] columns must have the inline comment — do not silently add columns\n- Order tables: independent tables first, dependent tables after\n\nOutput raw SQL only. No JSON wrapper, no markdown code fences.",
+      "systemPrompt": "You are a Database Schema Designer. You receive the domain model (RE_DOMAIN_MODELER_V1) and reviewed naming dictionary (RE_NAMING_CONVENTION_ARCHITECT_V1).\n\nProduce idempotent SQL migration statements for every aggregate root and entity. Use CREATE TABLE IF NOT EXISTS. Apply snake_case column names matching the naming dictionary sql_column values. Define column types, NOT NULL or NULL, PRIMARY KEY, UNIQUE, and FOREIGN KEY constraints. Automatically add created_at and updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP to every mutable table — mark auto-added columns with an inline -- [INFERRED] comment. Add an index on every foreign key column and on status/state columns.\n\nRules:\n- Use UUID for primary keys unless the confirmed tech stack specifies SERIAL/BIGSERIAL\n- Foreign keys must reference a table defined earlier in the migration file — no forward references\n- Boolean values: use BOOLEAN if the database supports it; otherwise INTEGER with CHECK (col IN (0,1))\n- All [INFERRED] columns must have the inline comment — do not silently add columns\n- Order tables: independent tables first, dependent tables after\n\nOutput raw SQL only. No JSON wrapper, no markdown code fences.",
       "dependencies": [
         "RE_DOMAIN_MODELER_V1",
-        "RE_NAMING_REVIEW_V1"
+        "RE_NAMING_CONVENTION_ARCHITECT_V1"
       ],
       "validatorAgentId": "RE_DB_SCHEMA_VALIDATOR_V1",
       "model": "standard",
@@ -317,14 +303,18 @@
       "grounded": false,
       "workflows": [
         "MCP_REQUIREMENTS_ENGINEERING_V1"
-      ]
+      ],
+      "humanFeedbackId": "RE_DB_SCHEMA_HITL_V1",
+      "humanFeedbackConfig": {
+        "maxLoops": 3
+      }
     },
     {
       "agentId": "RE_DB_SCHEMA_VALIDATOR_V1",
       "displayName": "Database Schema Validator",
       "description": "Validates that all domain entities are represented, PKs are defined, foreign keys are valid, and audit fields are present.",
       "agentType": "AI_VALIDATOR",
-      "systemPrompt": "You are a Database Schema Validator. Score RE_DATABASE_SCHEMA_DESIGNER_V1 against the domain model from RE_DOMAIN_MODELER_V1 and naming dictionary from RE_NAMING_REVIEW_V1.\n\nCheck in order:\n1. Every aggregate root and entity in the domain model maps to at least one CREATE TABLE — flag each unmapped entity by name\n2. Every table has a PRIMARY KEY defined — flag tables without PKs\n3. All foreign key references point to a table defined earlier in the same migration — flag forward references with table names\n4. All column names match the sql_column values in the naming dictionary — flag deviations with column name and correct form\n5. created_at and updated_at are present on all mutable tables — flag tables missing audit columns\n6. All auto-added columns carry an inline -- [INFERRED] comment — flag silently added columns\n\nScore 8-10: full entity coverage, all PKs, all FK references valid, all audit fields present.\nScore below 8: one or more checks failed.\n\nFeedback must name the specific table and missing element. Output exactly: { \"score\": <1-10>, \"feedback\": \"<actionable string>\" }",
+      "systemPrompt": "You are a Database Schema Validator. Score RE_DATABASE_SCHEMA_DESIGNER_V1 against the domain model from RE_DOMAIN_MODELER_V1 and naming dictionary from RE_NAMING_CONVENTION_ARCHITECT_V1.\n\nCheck in order:\n1. Every aggregate root and entity in the domain model maps to at least one CREATE TABLE — flag each unmapped entity by name\n2. Every table has a PRIMARY KEY defined — flag tables without PKs\n3. All foreign key references point to a table defined earlier in the same migration — flag forward references with table names\n4. All column names match the sql_column values in the naming dictionary — flag deviations with column name and correct form\n5. created_at and updated_at are present on all mutable tables — flag tables missing audit columns\n6. All auto-added columns carry an inline -- [INFERRED] comment — flag silently added columns\n\nScore 8-10: full entity coverage, all PKs, all FK references valid, all audit fields present.\nScore below 8: one or more checks failed.\n\nFeedback must name the specific table and missing element. Output exactly: { \"score\": <1-10>, \"feedback\": \"<actionable string>\" }",
       "dependencies": [
         "RE_DOMAIN_MODELER_V1"
       ],
@@ -358,6 +348,212 @@
       "workflows": [
         "MCP_REQUIREMENTS_ENGINEERING_V1"
       ]
+    },
+    {
+      "agentId": "RE_USE_CASE_HITL_V1",
+      "displayName": "Use Case Catalog Human Review",
+      "description": "Human-in-the-loop review gate attached to RE_USE_CASE_ANALYST_V1 via humanFeedbackId. Runs AFTER the automated RE_USE_CASE_VALIDATOR_V1 validator has already passed (or exhausted its own retries) — this is the final human sign-off on the use case catalog before it flows into domain modeling, API schema, and test strategy. Approving continues the workflow; requesting an update sends the human's feedback back to the analyst, which regenerates its output (re-passing through the automated validator first) and returns here for another look.",
+      "agentType": "HITL_VALIDATOR",
+      "systemPrompt": "Review the use case catalog above (use_cases, coverage_summary), cross-referenced against the normalised Phase 1 context also provided. Check specifically for:\n- Does every use case describe the flow the way the business actually works, not just a technically-valid interpretation of the requirement text?\n- Are the unhappy paths the ones that actually matter for this domain (the specific failure a real user or attacker would hit), not generic filler?\n- Does the MVP/FUTURE scope split match real business priority — is anything marked FUTURE that the business actually needs on day one, or vice versa?\n- Is any use case a stakeholder would obviously expect entirely missing (e.g. no way to cancel, no way to undo, no admin override)?\n- Are [INFERRED] scenarios (inferred: true) reasonable inferences, or should they be re-derived from a clearer source?\n\nThis is a human sign-off gate, not a second automated validator — coverage and testability have already passed automated scoring. Focus on business judgment calls an algorithm can't make. If it's solid, approve. If something needs to change, describe exactly what and why — the analyst will regenerate using your feedback plus its original input.",
+      "dependencies": [
+        "RE_CONTEXT_INTAKE_V1"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "Approved",
+              "Update"
+            ]
+          },
+          "feedback": {
+            "type": "string",
+            "description": "Required when status is Update — describe exactly what to change and why."
+          }
+        }
+      },
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ],
+      "minSubscriptionLevel": "developer"
+    },
+    {
+      "agentId": "RE_DOMAIN_HITL_V1",
+      "displayName": "Domain Model Human Review",
+      "description": "Human-in-the-loop review gate attached to RE_DOMAIN_MODELER_V1 via humanFeedbackId. Runs AFTER the automated RE_DOMAIN_VALIDATOR_V1 validator has already passed (or exhausted its own retries) — this is the final human sign-off on the domain model before it flows into field definitions, naming, API schema, and database schema. Approving continues the workflow; requesting an update sends the human's feedback back to the modeler, which regenerates its output (re-passing through the automated validator first) and returns here for another look.",
+      "agentType": "HITL_VALIDATOR",
+      "systemPrompt": "Review the domain model above (aggregates, domain_events, ddd_layer_assignment), cross-referenced against the use case catalog and Phase 1 context also provided. Check specifically for:\n- Are the aggregate boundaries right? A wrong consistency boundary (an aggregate that's too big, or splits data that must change together) is expensive to fix once code exists — this is the single highest-leverage thing to catch here.\n- Are the stated invariants the business rules that actually matter, not generic placeholders ('must not be empty' when the real rule is something domain-specific)?\n- Do the repository interfaces expose what the use cases actually need, without leaking infrastructure concerns?\n- Is any entity implied by the business (mentioned in Phase 1 context or a use case) missing from the model entirely?\n- Are [INFERRED] items reasonable, or should they be re-derived from a clearer source?\n\nThis is a human sign-off gate, not a second automated validator — structural completeness has already passed automated scoring. Focus on business judgment calls an algorithm can't make. If it's solid, approve. If something needs to change, describe exactly what and why — the modeler will regenerate using your feedback plus its original input.",
+      "dependencies": [
+        "RE_CONTEXT_INTAKE_V1",
+        "RE_USE_CASE_ANALYST_V1"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "Approved",
+              "Update"
+            ]
+          },
+          "feedback": {
+            "type": "string",
+            "description": "Required when status is Update — describe exactly what to change and why."
+          }
+        }
+      },
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ],
+      "minSubscriptionLevel": "developer"
+    },
+    {
+      "agentId": "RE_FIELD_DEFINITIONS_HITL_V1",
+      "displayName": "Field Definitions Human Review",
+      "description": "Human-in-the-loop review gate attached to RE_FIELD_DEFINITIONS_CATALOG_V1 via humanFeedbackId. Runs AFTER the automated RE_FIELD_DEFINITIONS_VALIDATOR_V1 validator has already passed (or exhausted its own retries) — this is the final human sign-off on field constraints before they are applied to the Naming Convention Dictionary, API Schema, and Database Schema. Approving continues the workflow; requesting an update sends the human's feedback back to the catalog agent, which regenerates its output (re-passing through the automated validator first) and returns here for another look.",
+      "agentType": "HITL_VALIDATOR",
+      "systemPrompt": "Review the field definitions catalog above (field_definitions, coverage_summary). Values marked inferred: true were derived using standard conventions (RFC 5321 for email length, bcrypt specification for password length, common domain defaults for titles and descriptions) — these are the entries most likely to need your attention. Check specifically for:\n- Numeric bounds (minLength, maxLength, minimum, maximum) — do they match your actual business expectations, not just a plausible-sounding default?\n- strictType: true fields — confirm these should reject type coercion (a string 'true' instead of boolean true) rather than accept it\n- systemGenerated: true fields — confirm these are genuinely server-set and should never appear in a request body\n- allowedValues enum lists — are they complete for your domain, or is a real value missing?\n- Any entry with notes '[DECISION REQUIRED: no bound defined]' — you must either provide a bound or explicitly confirm in your feedback that the field is intentionally unbounded\n\nThis is a human sign-off gate, not a second automated validator — catalog completeness has already passed automated scoring. If the catalog is correct, approve. If something needs to change, describe exactly which field and what the correct bound/behavior is — the agent will regenerate using your feedback plus its original input.",
+      "dependencies": [
+        "RE_DOMAIN_MODELER_V1",
+        "RE_USE_CASE_ANALYST_V1"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "Approved",
+              "Update"
+            ]
+          },
+          "feedback": {
+            "type": "string",
+            "description": "Required when status is Update — describe exactly what to change and why."
+          }
+        }
+      },
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ],
+      "minSubscriptionLevel": "developer"
+    },
+    {
+      "agentId": "RE_NAMING_HITL_V1",
+      "displayName": "Naming Convention Human Review",
+      "description": "Human-in-the-loop review gate attached to RE_NAMING_CONVENTION_ARCHITECT_V1 via humanFeedbackId. Runs AFTER RE_NAMING_CONVENTION_ARCHITECT_V1 (no automated validator on this agent) — this is the human sign-off on the canonical naming dictionary before it is applied uniformly to the API schema, database schema, and coding brief. Approving continues the workflow; requesting an update sends the human's feedback back to the architect, which regenerates its output and returns here for another look.",
+      "agentType": "HITL_VALIDATOR",
+      "systemPrompt": "Review the naming convention dictionary above (dictionary). This dictionary will be applied uniformly across entity names, API field names, database column names, and UI labels throughout every remaining artifact — a wrong canonical name here propagates everywhere downstream. Check specifically for:\n- Any entry flagged ambiguous: true — these appeared under different names in different upstream outputs and the workflow has chosen a canonical form; confirm the chosen form is actually the right one for your domain, not just the more common one\n- Do the canonical_name values match the field definitions catalog's canonical_name exactly, and do they read naturally to your team?\n- Are any banned_synonyms lists missing an alternative spelling you know your own docs or codebase already use?\n- Is the sql_column / json_field / ui_label mapping something your team would actually recognize, or does it introduce unfamiliar terminology?\n\nIf the dictionary is correct, approve. If a term needs to change, describe exactly which concept and what the correct canonical name should be — the architect will regenerate using your feedback plus its original input.",
+      "dependencies": [
+        "RE_DOMAIN_MODELER_V1",
+        "RE_CONTEXT_INTAKE_V1",
+        "RE_FIELD_DEFINITIONS_CATALOG_V1"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "Approved",
+              "Update"
+            ]
+          },
+          "feedback": {
+            "type": "string",
+            "description": "Required when status is Update — describe exactly what to change and why."
+          }
+        }
+      },
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ],
+      "minSubscriptionLevel": "developer"
+    },
+    {
+      "agentId": "RE_API_SCHEMA_HITL_V1",
+      "displayName": "API Schema Human Review",
+      "description": "Human-in-the-loop review gate attached to RE_API_SCHEMA_DESIGNER_V1 via humanFeedbackId. Runs AFTER the automated RE_API_SCHEMA_VALIDATOR_V1 validator has already passed (or exhausted its own retries) — this is the final human sign-off on the API contract before Phase 3 code generation begins. Approving continues the workflow; requesting an update sends the human's feedback back to the designer, which regenerates its output (re-passing through the automated validator first) and returns here for another look.",
+      "agentType": "HITL_VALIDATOR",
+      "systemPrompt": "Review the OpenAPI schema above, cross-referenced against the use case catalog also provided. This becomes the external contract Phase 3 codes against and any client (web, mobile, third party) integrates with — it is expensive to change once anything depends on it. Check specifically for:\n- Is this an API a real client team would actually want to consume, not just one that technically satisfies each use case? Look for endpoints that force a client into extra round-trips or awkward data assembly.\n- Are the rate-limited endpoints (auth, password reset, OTP) actually the ones that need it, and is anything sensitive missing an x-rate-limit annotation?\n- Are pagination parameters present on every list endpoint, even ones that seem small today?\n- Is anything a stakeholder would expect from this API entirely missing — a bulk operation, a search/filter capability, a webhook/notification surface — that no single use case called out explicitly but the business obviously needs?\n\nThis is a human sign-off gate, not a second automated validator — coverage, naming, and structural correctness have already passed automated scoring. Focus on business and API-design judgment calls an algorithm can't make. If it's solid, approve. If something needs to change, describe exactly what and why — the designer will regenerate using your feedback plus its original input.",
+      "dependencies": [
+        "RE_USE_CASE_ANALYST_V1",
+        "RE_NAMING_CONVENTION_ARCHITECT_V1",
+        "RE_CONTEXT_INTAKE_V1",
+        "RE_FIELD_DEFINITIONS_CATALOG_V1"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "Approved",
+              "Update"
+            ]
+          },
+          "feedback": {
+            "type": "string",
+            "description": "Required when status is Update — describe exactly what to change and why."
+          }
+        }
+      },
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ],
+      "minSubscriptionLevel": "developer"
+    },
+    {
+      "agentId": "RE_DB_SCHEMA_HITL_V1",
+      "displayName": "Database Schema Human Review",
+      "description": "Human-in-the-loop review gate attached to RE_DATABASE_SCHEMA_DESIGNER_V1 via humanFeedbackId. Runs AFTER the automated RE_DB_SCHEMA_VALIDATOR_V1 validator has already passed (or exhausted its own retries) — this is the final human sign-off on the migration set before Phase 3 code generation begins. Approving continues the workflow; requesting an update sends the human's feedback back to the designer, which regenerates its output (re-passing through the automated validator first) and returns here for another look.",
+      "agentType": "HITL_VALIDATOR",
+      "systemPrompt": "Review the SQL migrations above. This is the hardest artifact to change once real data exists in production — a missed index or wrong cascade rule discovered post-launch means a live migration against real rows, not a regenerated file. Check specifically for:\n- Are indexes present on every column your actual query patterns will filter or sort by, not just foreign keys and status columns? Think about the use cases that list, search, or report on this data.\n- Are foreign key ON DELETE/ON UPDATE behaviors (cascade, restrict, set null) the ones your business rules actually require — does deleting a parent row do what the business expects?\n- Does the UUID-vs-SERIAL primary key choice match your expected scale and any multi-region/offline-sync needs?\n- Is anything log-like or high-volume (audit trails, events) missing a partitioning or archival strategy that will matter well before you'd normally revisit this schema?\n\nThis is a human sign-off gate, not a second automated validator — entity coverage and constraint correctness have already passed automated scoring. If the migrations are solid, approve. If something needs to change, describe exactly which table and what the correct constraint/index/behavior is — the designer will regenerate using your feedback plus its original input.",
+      "dependencies": [
+        "RE_DOMAIN_MODELER_V1",
+        "RE_NAMING_CONVENTION_ARCHITECT_V1"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "Approved",
+              "Update"
+            ]
+          },
+          "feedback": {
+            "type": "string",
+            "description": "Required when status is Update — describe exactly what to change and why."
+          }
+        }
+      },
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ],
+      "minSubscriptionLevel": "developer"
     }
   ]
 }
