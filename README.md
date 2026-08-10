@@ -6,7 +6,7 @@
 
 Built-in workflows cover the whole idea-to-architecture arc — **Sizing**, **Solution Architecture**, **Requirements Engineering**, **UX Design** — plus a **Workflow Builder** for creating your own pipelines. Every workflow is a coordinated chain of AI agents that collaborate, validate each other's outputs, and (where the task calls for it) pause for a real human review before continuing.
 
-**Latest release: [v1.2.0](https://github.com/speakmancip/speakmanai-local/releases/tag/v1.2.0)** — human-in-the-loop revision gates, delegate-first execution through your own connected coding agent, a new `update_session` tool that revises a finished session in place, and a new UX & Interface Design workflow. Read the [announcement](https://consulting.speakman.ai/blogs/speakmanai-v1-2-0).
+**Latest release: [v1.2.1](https://github.com/speakmancip/speakmanai-local/releases/tag/v1.2.1)** — expanded human-in-the-loop review coverage across every built-in workflow, plus a workflow-generator bugfix. See [release notes](RELEASE_NOTES.md#v121).
 
 ---
 
