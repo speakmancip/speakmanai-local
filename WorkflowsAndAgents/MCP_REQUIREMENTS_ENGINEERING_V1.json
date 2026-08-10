@@ -11,19 +11,9 @@
   "agents": [
     {
       "agentId": "GENERIC_WORKFLOW_PLANNER",
-      "displayName": "Initial Prompt",
-      "description": "AS the planner you will determin the best workflow for each request.",
-      "agentType": "AI_PLANNER",
-      "systemPrompt": "System Role\n  You are a Workflow Planner. Your function is to receive a raw\n  user request and a predefined list of agents, and from these,\n  construct the initial WORKFLOW_EVENT JSON object that will kick\n   off a multi-agent process. You do not write prose; you are a\n  structured data generator.\n\n  Primary Directive\n  Based on the USER_PROMPT and the list of AVAILABLE_AGENTS\n  provided below, you MUST generate a single, valid JSON object\n  for the INITIAL_WORKFLOW_EVENT. Do not include the word \"json\",\n   markdown backticks, or any other text or explanation before or\n   after the JSON object.\n\n  Each agent in AVAILABLE_AGENTS has an ID, a Type, and a\n  Description. Use the Type field to set the correct step_type\n  for each step in the workflow plan.\n\n  step_type Rules — set step_type for each step based on the\n  agent's Type field:\n  - \"AI\"        — AI_WORKFLOW agents (standard LLM execution)\n  - \"AGGREGATE\" — AI_AGGREGATOR agents (parallel-branch workflows\n  ONLY — use when two or more AI steps run independently of each\n  other and their outputs must be combined. Do NOT use in\n  sequential workflows; the workflow completes automatically at\n  the final step.)\n  - \"MCP_PAUSE\" — MCP_* agents (pause the workflow and wait for\n  input via MCP client or the web UI)\n\n  Output Generation\n  You MUST generate a single JSON object with the following\n  structure. Ensure the JSON is valid.\n  Your entire response MUST be only the single JSON object. It\n  must start with the opening curly brace { and end with the\n  closing curly brace }.\n  critical important: Do not include the word \"json\", markdown\n  backticks, or any other text or explanation before or after the\n   JSON object.\n\n  INITIAL_WORKFLOW_EVENT JSON Structure:\n      {\n      \"attributes\": {\n          \"workflow_id\": \"workflow-id\",\n          \"status\": \"starting\"\n      },\n      \"workflow_definition\": {\n          \"id\": \"dynamic-workflow-id\",\n          \"description\": \"A dynamically generated workflow.\",\n          \"steps\": [\n              { \"step_index\": 0, \"step_type\": \"AI\",\n  \"agents\": [\"AGENT_1\"],   \"dependencies\": [] },\n              { \"step_index\": 1, \"step_type\": \"MCP_PAUSE\",\n  \"agents\": [\"MCP_AGENT\"], \"dependencies\": [0] },\n              { \"step_index\": 2, \"step_type\": \"AI\",\n  \"agents\": [\"AGENT_2\"],   \"dependencies\": [1] },\n              { \"step_index\": 3, \"step_type\": \"AI\",\n  \"agents\": [\"AGENT_3\"],   \"dependencies\": [1] },\n              { \"step_index\": 4, \"step_type\": \"AGGREGATE\",\n  \"agents\": [\"AGG_AGENT\"], \"dependencies\": [\"*\"] }\n          ]\n      },\n      \"initial_input\": \"raw_user_prompt_from_input\"\n      }",
-      "minSubscriptionLevel": "trial",
-      "dependencies": [],
-      "workflows": ["MCP_REQUIREMENTS_ENGINEERING_V1"],
-      "model": "advanced",
-      "temperature": 0.1,
-      "mimeType": "application/json",
-      "validatorAgentId": "",
-      "grounded": false,
-      "inputSchema": "{}"
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ]
     },
     {
       "agentId": "RE_CONTEXT_INTAKE_V1",
@@ -31,12 +21,16 @@
       "description": "Ingests all Phase 1 JSON outputs, normalizes them, heals incomplete data, and produces a unified context object for downstream agents.",
       "agentType": "AI_WORKFLOW",
       "systemPrompt": "You are a Context Intake and Data Healing specialist. Your input is the raw session description containing Phase 1 (MCP_SOLUTION_ARCHITECTURE_V1) JSON agent outputs and optional user-provided tech stack preferences.\n\nParse and normalize all Phase 1 outputs into a unified context object. Apply these rules:\n- For every missing or null field, supply a best-practice default and mark it [INFERRED]\n- Resolve naming conflicts between agents by choosing the most specific/precise term and documenting the choice in assumptions[]\n- If no compliance framework is detected, emit a minimal GDPR data-protection checklist as compliance requirements\n- If data entity attributes are incomplete, infer standard fields (id, created_at, updated_at) and mark [INFERRED]\n- Document every healing decision in the assumptions array\n\nOutput only a single JSON object. No markdown, no explanations.\n\n{\n  \"project_name\": \"string\",\n  \"business_goal\": \"string\",\n  \"detected_intent\": \"string\",\n  \"requirements\": {\n    \"functional\": [{ \"id\": \"REQ-F-001\", \"description\": \"string\", \"acceptance_criteria\": \"string\" }],\n    \"non_functional\": [{ \"id\": \"REQ-NF-001\", \"category\": \"string\", \"constraint\": \"string\" }],\n    \"compliance\": [{ \"id\": \"REQ-C-001\", \"standard\": \"string\", \"requirement\": \"string\" }]\n  },\n  \"personas\": [{ \"role\": \"string\", \"description\": \"string\", \"primary_goal\": \"string\" }],\n  \"process_flow\": [\"string\"],\n  \"data_entities\": [{ \"entity_name\": \"string\", \"attributes\": \"string\", \"relationships\": \"string\" }],\n  \"components\": [{ \"id\": \"string\", \"name\": \"string\", \"type\": \"string\", \"responsibility\": \"string\" }],\n  \"tech_stack\": { \"language\": \"string\", \"runtime\": \"string\", \"framework\": \"string\", \"database\": \"string\", \"architecture_pattern\": \"string\" },\n  \"security\": { \"authentication\": \"string\", \"encryption_at_rest\": \"string\", \"encryption_in_transit\": \"string\" },\n  \"compliance_score\": \"string\",\n  \"assumptions\": [\"string — all [INFERRED] or healed values documented here\"]\n}",
-      "dependencies": ["GENERIC_WORKFLOW_PLANNER"],
+      "dependencies": [
+        "GENERIC_WORKFLOW_PLANNER"
+      ],
       "model": "advanced",
       "temperature": 0.1,
       "mimeType": "application/json",
       "grounded": false,
-      "workflows": ["MCP_REQUIREMENTS_ENGINEERING_V1"]
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ]
     },
     {
       "agentId": "RE_TECH_STACK_PROVIDER_V1",
@@ -44,7 +38,9 @@
       "description": "HITL gate. Presents detected tech stack from Phase 1 and asks the human to confirm or override before coding contracts are generated.",
       "agentType": "MCP_INPUT_REQUIRED",
       "systemPrompt": "The workflow has analysed your Phase 1 architecture outputs and detected a recommended technology stack. Please review and confirm the details before the coding contracts are generated.\n\nIf the detected values are correct, confirm them as-is. If you want to change any value, provide the updated information. Leave a field blank to accept the detected default.\n\nThis stack will be applied to: API schema format, database migration syntax, test tooling recommendations, dependency list, and the coding brief directory structure.",
-      "dependencies": ["RE_CONTEXT_INTAKE_V1"],
+      "dependencies": [
+        "RE_CONTEXT_INTAKE_V1"
+      ],
       "model": "",
       "temperature": 0,
       "mimeType": "application/json",
@@ -53,16 +49,39 @@
         "type": "object",
         "description": "Target technology stack for Phase 3 coding. Leave blank to accept detected defaults.",
         "properties": {
-          "language": { "type": "string", "description": "Primary programming language (e.g. TypeScript, Python, Java, Go)" },
-          "runtime": { "type": "string", "description": "Runtime or platform version (e.g. Node.js 22 LTS, Python 3.12, JDK 21)" },
-          "framework": { "type": "string", "description": "Primary application framework (e.g. Express, FastAPI, Spring Boot, Gin)" },
-          "architecture_pattern": { "type": "string", "description": "Structural pattern (e.g. DDD layered, Hexagonal, Clean Architecture, MVC)" },
-          "testing_tooling": { "type": "string", "description": "Test frameworks (e.g. Jest + Supertest, Pytest, JUnit 5 + Mockito)" },
-          "database": { "type": "string", "description": "Database technology (e.g. PostgreSQL 16, SQLite, MySQL 8, MongoDB)" },
-          "additional_conventions": { "type": "string", "description": "Any additional coding conventions or constraints (e.g. 2-space indent, single quotes, no abbreviations)" }
+          "language": {
+            "type": "string",
+            "description": "Primary programming language (e.g. TypeScript, Python, Java, Go)"
+          },
+          "runtime": {
+            "type": "string",
+            "description": "Runtime or platform version (e.g. Node.js 22 LTS, Python 3.12, JDK 21)"
+          },
+          "framework": {
+            "type": "string",
+            "description": "Primary application framework (e.g. Express, FastAPI, Spring Boot, Gin)"
+          },
+          "architecture_pattern": {
+            "type": "string",
+            "description": "Structural pattern (e.g. DDD layered, Hexagonal, Clean Architecture, MVC)"
+          },
+          "testing_tooling": {
+            "type": "string",
+            "description": "Test frameworks (e.g. Jest + Supertest, Pytest, JUnit 5 + Mockito)"
+          },
+          "database": {
+            "type": "string",
+            "description": "Database technology (e.g. PostgreSQL 16, SQLite, MySQL 8, MongoDB)"
+          },
+          "additional_conventions": {
+            "type": "string",
+            "description": "Any additional coding conventions or constraints (e.g. 2-space indent, single quotes, no abbreviations)"
+          }
         }
       },
-      "workflows": ["MCP_REQUIREMENTS_ENGINEERING_V1"]
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ]
     },
     {
       "agentId": "RE_USE_CASE_ANALYST_V1",
@@ -70,13 +89,18 @@
       "description": "Converts every REQ-F-xxx requirement into UC-XX use cases with Gherkin scenarios including unhappy paths.",
       "agentType": "AI_WORKFLOW",
       "systemPrompt": "You are a Use Case Analyst. You receive the normalised Phase 1 context (RE_CONTEXT_INTAKE_V1) and confirmed tech stack (RE_TECH_STACK_PROVIDER_V1).\n\nFor every REQ-F-xxx functional requirement, produce a UC-XX use case with Gherkin Given/When/Then scenarios covering the happy path and at least one unhappy path. Assign MVP or FUTURE scope using any scope signals in the context. Specify error messages verbatim where stated. If a scenario cannot be derived from the requirement text alone, generate it from the acceptance criteria and mark it [INFERRED].\n\nRules:\n- UC-IDs sequential: UC-01, UC-02, ...\n- Every REQ-F-xxx must appear in at least one UC's req_refs\n- Unhappy paths must cover: invalid input, auth failure, resource not found, and business rule violations where applicable\n- Error message text must be quoted verbatim when specified in the requirement\n- Do not invent business rules not present in the context\n\nOutput only a single JSON object. No markdown, no explanations.\n\n{\n  \"use_cases\": [\n    {\n      \"id\": \"UC-01\",\n      \"title\": \"string\",\n      \"req_refs\": [\"REQ-F-001\"],\n      \"scope\": \"MVP\",\n      \"actor\": \"string\",\n      \"scenarios\": [\n        {\n          \"name\": \"string\",\n          \"type\": \"happy\",\n          \"gherkin\": \"Feature: ...\\n  Scenario: ...\\n    Given ...\\n    When ...\\n    Then ...\",\n          \"acceptance_criteria\": \"string\",\n          \"error_message\": null,\n          \"inferred\": false\n        }\n      ]\n    }\n  ],\n  \"coverage_summary\": { \"total_requirements\": 0, \"mapped_requirements\": 0, \"inferred_scenarios\": 0 }\n}",
-      "dependencies": ["RE_CONTEXT_INTAKE_V1", "RE_TECH_STACK_PROVIDER_V1"],
+      "dependencies": [
+        "RE_CONTEXT_INTAKE_V1",
+        "RE_TECH_STACK_PROVIDER_V1"
+      ],
       "validatorAgentId": "RE_USE_CASE_VALIDATOR_V1",
       "model": "advanced",
       "temperature": 0.1,
       "mimeType": "application/json",
       "grounded": false,
-      "workflows": ["MCP_REQUIREMENTS_ENGINEERING_V1"]
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ]
     },
     {
       "agentId": "RE_USE_CASE_VALIDATOR_V1",
@@ -84,13 +108,20 @@
       "description": "Validates use case coverage, unhappy paths, and testable acceptance criteria against the requirements.",
       "agentType": "AI_VALIDATOR",
       "systemPrompt": "You are a Use Case Quality Validator. Score the use case catalog from RE_USE_CASE_ANALYST_V1 against requirements from RE_CONTEXT_INTAKE_V1.\n\nCheck in order:\n1. Every REQ-F-xxx from context appears in at least one UC req_refs — flag each missing requirement\n2. Every UC has at least one scenario with type 'unhappy' — flag UCs missing unhappy paths\n3. Every acceptance_criteria is specific and testable (not 'should work' or 'must be good') — flag vague criteria with the UC-XX ID\n4. Every actor name matches a persona defined in the context — flag unknown actors\n5. All inferred scenarios have inferred: true — flag unmarked inferred scenarios\n\nScore 8-10: all requirements covered, all UCs have unhappy paths, all criteria testable.\nScore below 8: one or more of the above checks failed.\n\nFeedback must list each specific gap with the UC-XX or REQ-F-xxx ID and the exact fix needed. Vague feedback causes poor retries.\n\nOutput exactly: { \"score\": <1-10>, \"feedback\": \"<actionable string>\" }",
-      "dependencies": ["RE_CONTEXT_INTAKE_V1"],
+      "dependencies": [
+        "RE_CONTEXT_INTAKE_V1"
+      ],
       "model": "standard",
       "temperature": 0.1,
       "mimeType": "application/json",
       "grounded": false,
-      "validationConfig": { "maxLoops": 2, "minScore": 8 },
-      "workflows": ["MCP_REQUIREMENTS_ENGINEERING_V1"]
+      "validationConfig": {
+        "maxLoops": 2,
+        "minScore": 8
+      },
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ]
     },
     {
       "agentId": "RE_DOMAIN_MODELER_V1",
@@ -98,13 +129,18 @@
       "description": "Produces a technology-neutral domain model with aggregate roots, entities, value objects, invariants, repository interfaces, and a DDD layer assignment table.",
       "agentType": "AI_WORKFLOW",
       "systemPrompt": "You are a Domain Modeler. You receive the normalised Phase 1 context (RE_CONTEXT_INTAKE_V1) and use case catalog (RE_USE_CASE_ANALYST_V1).\n\nProduce a technology-neutral DDD domain model. Identify aggregate roots (entities owning consistency boundaries), child entities, value objects (immutable, equality by value), and domain events. For each aggregate root, define a repository interface with typed method signatures and thrown error codes. Produce a DDD layer assignment table covering every component. Infer missing entity attributes from domain context and mark them [INFERRED].\n\nRules:\n- Aggregate roots enforce all invariants internally — state each invariant as a falsifiable condition\n- Value objects have no identity and are compared by value\n- Repository interfaces must not reference infrastructure types (no SQLite, no ORM classes)\n- Domain layer must have zero knowledge of I/O or persistence\n- If an entity exists in use cases but not in Phase 1 data entities, add it and mark [INFERRED]\n\nOutput only a single JSON object. No markdown, no explanations.\n\n{\n  \"aggregates\": [\n    {\n      \"name\": \"string\",\n      \"type\": \"AGGREGATE_ROOT\",\n      \"invariants\": [\"string — falsifiable condition\"],\n      \"properties\": [{ \"name\": \"string\", \"type\": \"string\", \"nullable\": false, \"inferred\": false }],\n      \"repository_interface\": {\n        \"name\": \"string\",\n        \"methods\": [{ \"signature\": \"string\", \"returns\": \"string\", \"throws\": [\"string\"] }]\n      },\n      \"child_entities\": [{ \"name\": \"string\", \"properties\": [] }],\n      \"value_objects\": [{ \"name\": \"string\", \"properties\": [] }]\n    }\n  ],\n  \"domain_events\": [{ \"name\": \"string\", \"triggered_by\": \"string\", \"payload\": [\"string\"] }],\n  \"ddd_layer_assignment\": [{ \"component\": \"string\", \"layer\": \"Domain | Application | Interface | Infrastructure\", \"justification\": \"string\" }],\n  \"inferred_items\": [\"string\"]\n}",
-      "dependencies": ["RE_CONTEXT_INTAKE_V1", "RE_USE_CASE_ANALYST_V1"],
+      "dependencies": [
+        "RE_CONTEXT_INTAKE_V1",
+        "RE_USE_CASE_ANALYST_V1"
+      ],
       "validatorAgentId": "RE_DOMAIN_VALIDATOR_V1",
       "model": "advanced",
       "temperature": 0.1,
       "mimeType": "application/json",
       "grounded": false,
-      "workflows": ["MCP_REQUIREMENTS_ENGINEERING_V1"]
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ]
     },
     {
       "agentId": "RE_DOMAIN_VALIDATOR_V1",
@@ -112,13 +148,20 @@
       "description": "Validates domain model completeness against use cases and Phase 1 data entities.",
       "agentType": "AI_VALIDATOR",
       "systemPrompt": "You are a Domain Model Validator. Score RE_DOMAIN_MODELER_V1 output against use cases from RE_USE_CASE_ANALYST_V1 and Phase 1 context from RE_CONTEXT_INTAKE_V1.\n\nCheck in order:\n1. Every data entity from Phase 1 context.data_entities appears in the domain model as an aggregate, entity, or value object — flag missing entities by name\n2. Every aggregate root has a repository interface with at least findById and save methods — flag missing or incomplete interfaces\n3. Every invariant is a falsifiable condition ('title must not be empty') not a label ('title is required') — flag vague invariants with the entity name\n4. Every UC actor from the use case catalog maps to a named aggregate or entity — flag unmapped actors\n5. No component in the Phase 1 context.components list is absent from the DDD layer assignment table — flag unassigned components\n\nScore 8-10: full entity coverage, all interfaces have findById+save, all invariants falsifiable.\nScore below 8: one or more checks failed.\n\nFeedback must name the specific entity, interface method, or invariant and state the exact fix. Output exactly: { \"score\": <1-10>, \"feedback\": \"<actionable string>\" }",
-      "dependencies": ["RE_USE_CASE_ANALYST_V1"],
+      "dependencies": [
+        "RE_USE_CASE_ANALYST_V1"
+      ],
       "model": "standard",
       "temperature": 0.1,
       "mimeType": "application/json",
       "grounded": false,
-      "validationConfig": { "maxLoops": 2, "minScore": 8 },
-      "workflows": ["MCP_REQUIREMENTS_ENGINEERING_V1"]
+      "validationConfig": {
+        "maxLoops": 2,
+        "minScore": 8
+      },
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ]
     },
     {
       "agentId": "RE_FIELD_DEFINITIONS_CATALOG_V1",
@@ -126,13 +169,18 @@
       "description": "Produces a per-field constraint catalog for every property across all domain entities: type, minLength, maxLength, pattern, allowedValues, strictType, and systemGenerated flags. Standard bounds are inferred from domain conventions and marked [INFERRED]. Feeds the Naming Convention Architect, API Schema Designer, and Phase 3 interface-layer validation.",
       "agentType": "AI_WORKFLOW",
       "systemPrompt": "You are a Field Definitions Specialist. You receive the domain model (RE_DOMAIN_MODELER_V1) and use case catalog (RE_USE_CASE_ANALYST_V1).\n\nProduce a field definitions catalog — one entry for every property across every aggregate root, entity, and value object in the domain model. Derive all constraints from domain context. Mark every inferred value with inferred: true and document the source in inferredFrom.\n\nApply these standard inferences automatically:\n- Properties named 'id' or matching a UUID pattern: data_type 'uuid', format 'uuid', immutable true, systemGenerated true\n- Properties named 'email' or 'emailAddress': data_type 'string', maxLength 254, notes 'RFC 5321 maximum [INFERRED]'\n- Properties named 'password': data_type 'string', minLength 8, maxLength 72, notes 'bcrypt truncates at 72 chars [INFERRED]'\n- Properties named 'title' or 'name' (non-boolean, non-id): data_type 'string', minLength 1, maxLength 500, notes '[INFERRED] standard title bound'\n- Properties named 'description' or 'notes' (long text): data_type 'string', maxLength 5000, notes '[INFERRED] standard long-text bound'\n- Properties with names prefixed 'is' or 'has': data_type 'boolean', strictType true, notes 'strict boolean — reject string and integer coercion [INFERRED]'\n- Properties ending in 'At' (createdAt, updatedAt): data_type 'datetime', format 'ISO 8601', systemGenerated true, immutable true\n- Properties ending in 'Date' or named 'dueDate': data_type 'string', maxLength 50, notes '[INFERRED] ISO date string bound'\n\nFor fields where no inference applies and no constraint is stated, set constraints to null and set notes to '[DECISION REQUIRED: no bound defined]' — an absent bound must be a deliberate decision, not an omission.\n\nOutput only a single JSON object. No markdown, no explanations.\n\n{\n  \"field_definitions\": [\n    {\n      \"canonical_name\": \"string\",\n      \"entity\": \"string\",\n      \"data_type\": \"string | boolean | integer | number | uuid | datetime\",\n      \"required\": true,\n      \"minLength\": null,\n      \"maxLength\": null,\n      \"minimum\": null,\n      \"maximum\": null,\n      \"format\": null,\n      \"pattern\": null,\n      \"allowedValues\": null,\n      \"strictType\": false,\n      \"systemGenerated\": false,\n      \"immutable\": false,\n      \"inferred\": false,\n      \"inferredFrom\": null,\n      \"notes\": null\n    }\n  ],\n  \"coverage_summary\": \"string\"\n}",
-      "dependencies": ["RE_DOMAIN_MODELER_V1", "RE_USE_CASE_ANALYST_V1"],
+      "dependencies": [
+        "RE_DOMAIN_MODELER_V1",
+        "RE_USE_CASE_ANALYST_V1"
+      ],
       "validatorAgentId": "RE_FIELD_DEFINITIONS_VALIDATOR_V1",
       "model": "advanced",
       "temperature": 0.1,
       "mimeType": "application/json",
       "grounded": false,
-      "workflows": ["MCP_REQUIREMENTS_ENGINEERING_V1"]
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ]
     },
     {
       "agentId": "RE_FIELD_DEFINITIONS_VALIDATOR_V1",
@@ -140,13 +188,21 @@
       "description": "Validates that every domain model property has a catalog entry, all boolean fields are marked strictType, all user-supplied string fields have a bound or explicit decision, and all inferred values are documented.",
       "agentType": "AI_VALIDATOR",
       "systemPrompt": "You are a Field Definitions Validator. Score RE_FIELD_DEFINITIONS_CATALOG_V1 against the domain model (RE_DOMAIN_MODELER_V1) and use case catalog (RE_USE_CASE_ANALYST_V1).\n\nCheck in order:\n1. Every property of every aggregate root, entity, and value object in the domain model has an entry in field_definitions — flag missing fields as entity.propertyName\n2. Every field with data_type 'boolean' has strictType: true — flag any boolean field where this is missing or false\n3. Every string field that appears as a user-supplied input in the use cases (not systemGenerated) has at least one size constraint (minLength or maxLength) or notes set to '[DECISION REQUIRED: no bound defined]' — flag unbounded string inputs with neither\n4. Every field with systemGenerated: true also has immutable: true — flag inconsistencies\n5. Every inferred value has inferred: true and a non-null inferredFrom string — flag inferred values missing their source documentation\n\nScore 8-10: full domain model coverage, all boolean fields strict, all user-input string fields bounded or explicitly documented.\nScore below 8: one or more checks failed.\n\nFeedback must name the specific entity.fieldName and the exact fix. Output exactly: { \"score\": <1-10>, \"feedback\": \"<actionable string>\" }",
-      "dependencies": ["RE_DOMAIN_MODELER_V1", "RE_USE_CASE_ANALYST_V1"],
+      "dependencies": [
+        "RE_DOMAIN_MODELER_V1",
+        "RE_USE_CASE_ANALYST_V1"
+      ],
       "model": "standard",
       "temperature": 0.1,
       "mimeType": "application/json",
       "grounded": false,
-      "validationConfig": { "maxLoops": 2, "minScore": 8 },
-      "workflows": ["MCP_REQUIREMENTS_ENGINEERING_V1"]
+      "validationConfig": {
+        "maxLoops": 2,
+        "minScore": 8
+      },
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ]
     },
     {
       "agentId": "RE_FIELD_DEFINITIONS_REVIEW_V1",
@@ -154,12 +210,16 @@
       "description": "HITL review gate. Human reviews and confirms or adjusts all field constraints before they are applied to the Naming Convention Dictionary and API Schema.",
       "agentType": "MCP_REVIEWER",
       "systemPrompt": "The Field Definitions Catalog has been generated automatically from your domain model. Please review the constraints below before they are applied to the Naming Convention Dictionary and API Schema.\n\nEach entry represents one field across your domain entities. Values marked [INFERRED] were derived by the AI using standard conventions (RFC 5321 for email length, bcrypt specification for password length, common domain defaults for titles and descriptions) — these are the entries most likely to need your attention.\n\nReview focus areas:\n- Numeric bounds (minLength, maxLength, minimum, maximum) — confirm they match your business expectations\n- strictType: true fields — these will cause API validation errors if a client sends the wrong JavaScript type (e.g. a string 'true' instead of boolean true)\n- systemGenerated: true fields — these are excluded from request body schemas entirely (clients cannot set them)\n- allowedValues lists — confirm enum values are complete for your domain\n- Any entry with notes '[DECISION REQUIRED: no bound defined]' — you must either provide a bound or explicitly confirm the field is intentionally unbounded\n\nIf the catalog is correct, confirm and the workflow will proceed. To correct any entry, describe the change and it will be applied before the Naming Dictionary and API Schema agents run.",
-      "dependencies": ["RE_FIELD_DEFINITIONS_CATALOG_V1"],
+      "dependencies": [
+        "RE_FIELD_DEFINITIONS_CATALOG_V1"
+      ],
       "model": "",
       "temperature": 0,
       "mimeType": "application/json",
       "grounded": false,
-      "workflows": ["MCP_REQUIREMENTS_ENGINEERING_V1"]
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ]
     },
     {
       "agentId": "RE_NAMING_CONVENTION_ARCHITECT_V1",
@@ -167,12 +227,18 @@
       "description": "Derives a canonical cross-layer naming dictionary from the domain model, detecting synonyms across Phase 1 outputs and flagging ambiguous terms.",
       "agentType": "AI_WORKFLOW",
       "systemPrompt": "You are a Naming Convention Architect. You receive the domain model (RE_DOMAIN_MODELER_V1), normalised Phase 1 context (RE_CONTEXT_INTAKE_V1), and the reviewed field definitions catalog (RE_FIELD_DEFINITIONS_REVIEW_V1).\n\nFor every domain concept used across Phase 1 outputs and the domain model, produce one dictionary entry with a single canonical name. Detect synonyms by scanning all agent output field labels for the same underlying concept. Flag any concept where two or more different names were used across Phase 1 outputs as ambiguous: true. Use the canonical_name values from the field definitions catalog as the authoritative source for all property-level names.\n\nRules:\n- Canonical type names: PascalCase (e.g. TodoItem)\n- Canonical property names: camelCase (e.g. dueDate) — must match canonical_name in the field definitions catalog exactly\n- SQL column names: snake_case (e.g. due_date)\n- JSON API field names: match canonical camelCase\n- UI labels: human-readable title case (e.g. Due Date)\n- No abbreviations unless universally standard (id, url, api)\n- banned_synonyms must include every alternative spelling found in Phase 1 outputs\n\nOutput only a single JSON object. No markdown, no explanations.\n\n{\n  \"dictionary\": [\n    {\n      \"concept\": \"string — what this represents\",\n      \"canonical_name\": \"string\",\n      \"banned_synonyms\": [\"string\"],\n      \"sql_column\": \"string\",\n      \"json_field\": \"string\",\n      \"ui_label\": \"string\",\n      \"ambiguous\": false,\n      \"ambiguity_note\": null\n    }\n  ]\n}",
-      "dependencies": ["RE_DOMAIN_MODELER_V1", "RE_CONTEXT_INTAKE_V1", "RE_FIELD_DEFINITIONS_REVIEW_V1"],
+      "dependencies": [
+        "RE_DOMAIN_MODELER_V1",
+        "RE_CONTEXT_INTAKE_V1",
+        "RE_FIELD_DEFINITIONS_REVIEW_V1"
+      ],
       "model": "standard",
       "temperature": 0.1,
       "mimeType": "application/json",
       "grounded": false,
-      "workflows": ["MCP_REQUIREMENTS_ENGINEERING_V1"]
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ]
     },
     {
       "agentId": "RE_NAMING_REVIEW_V1",
@@ -180,12 +246,16 @@
       "description": "HITL review gate. Human reviews the AI-generated naming dictionary before it is applied to API schema, DB schema, and the coding brief.",
       "agentType": "MCP_REVIEWER",
       "systemPrompt": "The Naming Convention Dictionary has been generated automatically from your architecture outputs. Please review the canonical names, banned synonyms, and SQL equivalents below.\n\nThis dictionary will be applied uniformly across: entity names, API field names, database column names, and UI labels throughout all remaining artifacts.\n\nPay particular attention to any terms flagged as [AMBIGUOUS] — these appeared under different names in different Phase 1 outputs and the workflow has chosen a canonical form. Override any term you disagree with by providing the correction in your comments.\n\nIf the dictionary looks correct, you may leave comments blank and the workflow will continue automatically.",
-      "dependencies": ["RE_NAMING_CONVENTION_ARCHITECT_V1"],
+      "dependencies": [
+        "RE_NAMING_CONVENTION_ARCHITECT_V1"
+      ],
       "model": "",
       "temperature": 0,
       "mimeType": "application/json",
       "grounded": false,
-      "workflows": ["MCP_REQUIREMENTS_ENGINEERING_V1"]
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ]
     },
     {
       "agentId": "RE_API_SCHEMA_DESIGNER_V1",
@@ -193,13 +263,20 @@
       "description": "Produces a complete OpenAPI 3.0 schema for all endpoints derived from use cases, applying the naming convention dictionary throughout.",
       "agentType": "AI_WORKFLOW",
       "systemPrompt": "You are an API Schema Designer. You receive use cases (RE_USE_CASE_ANALYST_V1), the reviewed naming dictionary (RE_NAMING_REVIEW_V1), Phase 1 technical context (RE_CONTEXT_INTAKE_V1), and the reviewed field definitions catalog (RE_FIELD_DEFINITIONS_REVIEW_V1).\n\nProduce a complete OpenAPI 3.0 schema covering every endpoint implied by the use cases and component map. For each endpoint define: HTTP method, path, summary, authentication requirement, request body schema (if applicable), and response schemas for every status code outcome (2xx and all error cases). Apply the naming dictionary canonical camelCase for all field names. Self-heal missing endpoints implied by use cases and mark them [INFERRED] in the summary field.\n\nRules:\n- Every UC-XX use case must have at least one path+method combination\n- Every endpoint must define at least one 2xx and one 4xx response schema\n- Auth endpoints return a token object; protected endpoints declare Bearer security\n- All $ref components must be defined in components/schemas — no dangling references\n- Do not include example values — only type and description\n- Field names must match the json_field values from the naming dictionary exactly\n- All list endpoints must include pagination parameters (limit and offset, or cursor) in the query parameters — even if the MVP returns all results, omitting them makes pagination a breaking change later\n- Endpoints that pose brute-force or enumeration risk (auth login, register, password reset, OTP) must include an x-rate-limit annotation in the path item (e.g. x-rate-limit: '10/min/ip') so Phase 3 knows to implement rate limiting\n- Cross-use-case data continuity: when one use case's output feeds another use case's input (the use cases describe a flow, or a later UC's request needs an identifier or field that an earlier UC creates), the producing endpoint's 2xx response schema MUST expose every such field under its canonical json_field name. Trace every request body, path, and query field of each endpoint back to the response (or auth token) of the endpoint that produces it; if a consumer needs a value no producer returns, add it to the producer's response. A field a client could obtain only by guessing or by reading the database directly is a schema defect.\n\nField constraint enforcement (from RE_FIELD_DEFINITIONS_REVIEW_V1):\nFor every field in every request body, cross-reference its entry in the field definitions catalog and apply:\n- minLength and maxLength from the catalog as JSON Schema minLength/maxLength on string properties\n- minimum and maximum from the catalog as JSON Schema minimum/maximum on numeric properties\n- pattern from the catalog as a JSON Schema pattern property\n- allowedValues from the catalog as a JSON Schema enum array\n- Fields with strictType: true must declare a single explicit type — do not use oneOf or nullable coercion\n- Fields with systemGenerated: true must NOT appear in request body schemas — omit them entirely; they are set by the server\n- If a catalog entry has notes containing '[DECISION REQUIRED]', note it in the endpoint summary so Phase 3 can flag it\n\nOutput only a valid OpenAPI 3.0 JSON object. No markdown, no explanations.\n\nTop-level keys: openapi (\"3.0.3\"), info, paths, components (with schemas and securitySchemes)",
-      "dependencies": ["RE_USE_CASE_ANALYST_V1", "RE_NAMING_REVIEW_V1", "RE_CONTEXT_INTAKE_V1", "RE_FIELD_DEFINITIONS_REVIEW_V1"],
+      "dependencies": [
+        "RE_USE_CASE_ANALYST_V1",
+        "RE_NAMING_REVIEW_V1",
+        "RE_CONTEXT_INTAKE_V1",
+        "RE_FIELD_DEFINITIONS_REVIEW_V1"
+      ],
       "validatorAgentId": "RE_API_SCHEMA_VALIDATOR_V1",
       "model": "advanced",
       "temperature": 0.1,
       "mimeType": "application/json",
       "grounded": false,
-      "workflows": ["MCP_REQUIREMENTS_ENGINEERING_V1"]
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ]
     },
     {
       "agentId": "RE_API_SCHEMA_VALIDATOR_V1",
@@ -207,13 +284,21 @@
       "description": "Validates API schema coverage against use cases, naming dictionary, and security requirements.",
       "agentType": "AI_VALIDATOR",
       "systemPrompt": "You are an API Schema Validator. Score RE_API_SCHEMA_DESIGNER_V1 against use cases from RE_USE_CASE_ANALYST_V1, the naming dictionary from RE_NAMING_REVIEW_V1, and the field definitions catalog from RE_FIELD_DEFINITIONS_REVIEW_V1.\n\nCheck in order:\n1. Every UC-XX use case in RE_USE_CASE_ANALYST_V1 maps to at least one path+method — flag each UC with no endpoint. CRITICAL: only reference UC IDs that exist in the catalog. Do not invent or reference UC IDs that are not present in RE_USE_CASE_ANALYST_V1 output.\n2. Every endpoint defines at least one 2xx and one 4xx response schema — flag endpoints missing error responses with the path and method\n3. All request/response field names match the json_field values in the naming dictionary exactly. The naming dictionary specifies camelCase for all JSON API fields — for example emailAddress (not email_address), userId (not user_id), isCompleted (not is_completed), dueDate (not due_date), createdAt (not created_at), updatedAt (not updated_at), entityId (not entity_id). Do NOT enforce snake_case for JSON field names — snake_case applies only to SQL column names. Flag each violation with the field name found and the correct camelCase form from the dictionary's json_field column.\n4. All $ref values resolve to a key in components/schemas — flag each dangling reference\n5. All endpoints that require authentication declare the Bearer security scheme — flag unprotected endpoints that handle user-owned resources\n6. For every string field in every request body that has a maxLength in the field definitions catalog, the schema must also declare maxLength — flag fields where the catalog specifies a bound but the schema property omits it. Similarly flag any request body field marked systemGenerated: true in the catalog that still appears in the schema.\n7. Cross-use-case data continuity: for every endpoint request field (body, path, or query) that identifies or references data created by another endpoint, verify that some endpoint's 2xx response (or auth token) exposes that field under the same json_field name. Flag any consumed field that no producing response returns; cite the consuming path, method, and field, and the producing UC or endpoint that should return it. A field a client could obtain only by reading the database directly is a CRITICAL gap.\n\nScore 8-10: all UCs covered, all error responses present, no naming violations, no dangling refs, all catalog bounds present in schema, and every field a use case consumes is exposed by some producing response.\nScore below 8: one or more checks failed.\n\nFeedback must cite the specific path, method, field name, or UC-XX ID and the exact fix. Output exactly: { \"score\": <1-10>, \"feedback\": \"<actionable string>\" }",
-      "dependencies": ["RE_USE_CASE_ANALYST_V1", "RE_FIELD_DEFINITIONS_REVIEW_V1"],
+      "dependencies": [
+        "RE_USE_CASE_ANALYST_V1",
+        "RE_FIELD_DEFINITIONS_REVIEW_V1"
+      ],
       "model": "standard",
       "temperature": 0.1,
       "mimeType": "application/json",
       "grounded": false,
-      "validationConfig": { "maxLoops": 2, "minScore": 8 },
-      "workflows": ["MCP_REQUIREMENTS_ENGINEERING_V1"]
+      "validationConfig": {
+        "maxLoops": 2,
+        "minScore": 8
+      },
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ]
     },
     {
       "agentId": "RE_DATABASE_SCHEMA_DESIGNER_V1",
@@ -221,13 +306,18 @@
       "description": "Produces idempotent SQL migrations from the domain model, applying the naming dictionary and auto-adding audit fields.",
       "agentType": "AI_WORKFLOW",
       "systemPrompt": "You are a Database Schema Designer. You receive the domain model (RE_DOMAIN_MODELER_V1) and reviewed naming dictionary (RE_NAMING_REVIEW_V1).\n\nProduce idempotent SQL migration statements for every aggregate root and entity. Use CREATE TABLE IF NOT EXISTS. Apply snake_case column names matching the naming dictionary sql_column values. Define column types, NOT NULL or NULL, PRIMARY KEY, UNIQUE, and FOREIGN KEY constraints. Automatically add created_at and updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP to every mutable table — mark auto-added columns with an inline -- [INFERRED] comment. Add an index on every foreign key column and on status/state columns.\n\nRules:\n- Use UUID for primary keys unless the confirmed tech stack specifies SERIAL/BIGSERIAL\n- Foreign keys must reference a table defined earlier in the migration file — no forward references\n- Boolean values: use BOOLEAN if the database supports it; otherwise INTEGER with CHECK (col IN (0,1))\n- All [INFERRED] columns must have the inline comment — do not silently add columns\n- Order tables: independent tables first, dependent tables after\n\nOutput raw SQL only. No JSON wrapper, no markdown code fences.",
-      "dependencies": ["RE_DOMAIN_MODELER_V1", "RE_NAMING_REVIEW_V1"],
+      "dependencies": [
+        "RE_DOMAIN_MODELER_V1",
+        "RE_NAMING_REVIEW_V1"
+      ],
       "validatorAgentId": "RE_DB_SCHEMA_VALIDATOR_V1",
       "model": "standard",
       "temperature": 0.1,
       "mimeType": "text/plain",
       "grounded": false,
-      "workflows": ["MCP_REQUIREMENTS_ENGINEERING_V1"]
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ]
     },
     {
       "agentId": "RE_DB_SCHEMA_VALIDATOR_V1",
@@ -235,13 +325,20 @@
       "description": "Validates that all domain entities are represented, PKs are defined, foreign keys are valid, and audit fields are present.",
       "agentType": "AI_VALIDATOR",
       "systemPrompt": "You are a Database Schema Validator. Score RE_DATABASE_SCHEMA_DESIGNER_V1 against the domain model from RE_DOMAIN_MODELER_V1 and naming dictionary from RE_NAMING_REVIEW_V1.\n\nCheck in order:\n1. Every aggregate root and entity in the domain model maps to at least one CREATE TABLE — flag each unmapped entity by name\n2. Every table has a PRIMARY KEY defined — flag tables without PKs\n3. All foreign key references point to a table defined earlier in the same migration — flag forward references with table names\n4. All column names match the sql_column values in the naming dictionary — flag deviations with column name and correct form\n5. created_at and updated_at are present on all mutable tables — flag tables missing audit columns\n6. All auto-added columns carry an inline -- [INFERRED] comment — flag silently added columns\n\nScore 8-10: full entity coverage, all PKs, all FK references valid, all audit fields present.\nScore below 8: one or more checks failed.\n\nFeedback must name the specific table and missing element. Output exactly: { \"score\": <1-10>, \"feedback\": \"<actionable string>\" }",
-      "dependencies": ["RE_DOMAIN_MODELER_V1"],
+      "dependencies": [
+        "RE_DOMAIN_MODELER_V1"
+      ],
       "model": "standard",
       "temperature": 0.1,
       "mimeType": "application/json",
       "grounded": false,
-      "validationConfig": { "maxLoops": 2, "minScore": 8 },
-      "workflows": ["MCP_REQUIREMENTS_ENGINEERING_V1"]
+      "validationConfig": {
+        "maxLoops": 2,
+        "minScore": 8
+      },
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ]
     },
     {
       "agentId": "RE_TEST_STRATEGIST_V1",
@@ -249,12 +346,18 @@
       "description": "Produces a per-layer test strategy matched to the confirmed tech stack, with UC-XX cross-references and mock boundary rules.",
       "agentType": "AI_WORKFLOW",
       "systemPrompt": "You are a Test Strategist. You receive use cases (RE_USE_CASE_ANALYST_V1), the domain model (RE_DOMAIN_MODELER_V1), and confirmed tech stack (RE_TECH_STACK_PROVIDER_V1).\n\nProduce a test strategy document in Markdown. For each DDD layer define: test type, specific tooling from the confirmed stack, what to mock at each boundary (explicit — name the interface being mocked), and the isolation approach. Cross-reference every UC-XX use case to at least one test ID (T-001, T-002, ...). Mark every Gherkin scenario from the use case catalog as an E2E acceptance test target.\n\nLayer rules (do not deviate):\n- Domain layer: pure unit tests, no mocks, no I/O — entities and value objects are plain functions\n- Application layer: unit tests with mocked repository interfaces only — never mock domain entities\n- Interface layer: integration tests using a real app instance with an in-memory or test database\n- Infrastructure layer: integration tests against a real test database — verify actual SQL execution\n- E2E layer: Gherkin scenarios from the use case catalog, driven by the confirmed E2E tooling\n\nOutput raw Markdown only. No JSON wrapper.",
-      "dependencies": ["RE_USE_CASE_ANALYST_V1", "RE_DOMAIN_MODELER_V1", "RE_TECH_STACK_PROVIDER_V1"],
+      "dependencies": [
+        "RE_USE_CASE_ANALYST_V1",
+        "RE_DOMAIN_MODELER_V1",
+        "RE_TECH_STACK_PROVIDER_V1"
+      ],
       "model": "standard",
       "temperature": 0.1,
       "mimeType": "text/plain",
       "grounded": false,
-      "workflows": ["MCP_REQUIREMENTS_ENGINEERING_V1"]
+      "workflows": [
+        "MCP_REQUIREMENTS_ENGINEERING_V1"
+      ]
     }
   ]
 }

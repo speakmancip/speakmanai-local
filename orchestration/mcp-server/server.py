@@ -35,7 +35,9 @@ from engine import (
     process_local_event,
     list_projects_local,
     get_project_local,
-    generate_document_local
+    generate_document_local,
+    resolve_agent_step_index,
+    transition_completed_or_cancelled_to_draft,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -256,15 +258,28 @@ async def submit_response(
     step_index = mcp_input_config.get("step_index", 1)
     agent_id = mcp_input_config.get("agent_id", "MCP_INPUT_REQUIRED")
 
-    # Push resume event to internal local queue
-    await workflow_queue.put({
-        "action": "resume",
-        "session_id": session_id,
-        "content": response,
-        "current_step_index": step_index,
-        "agentId": agent_id,
-        "user_id": "local_user"
-    })
+    if mcp_input_config.get("pause_kind") == "hitl_feedback":
+        # Human-review gate — routes to the origin agent's revise-or-advance loop, not a
+        # normal DAG step resume.
+        await workflow_queue.put({
+            "action": "hitl_response",
+            "session_id": session_id,
+            "response": response,
+            "current_step_index": step_index,
+            "hitl_agent_id": agent_id,
+            "origin_agent_id": mcp_input_config.get("origin_agent_id", ""),
+            "user_id": "local_user",
+        })
+    else:
+        # Push resume event to internal local queue
+        await workflow_queue.put({
+            "action": "resume",
+            "session_id": session_id,
+            "content": response,
+            "current_step_index": step_index,
+            "agentId": agent_id,
+            "user_id": "local_user"
+        })
 
     # Clear AWAITING_INPUT state so poll_workflow reflects IN_PROGRESS immediately
     await db[COLLECTION].update_one(
@@ -367,13 +382,26 @@ async def poll_workflow(session_id: str, mcp_ctx: Context) -> str:
             "agent_id": mcp_input_config.get("agent_id", ""),
             "agent_type": agent_type,
         }
-        
+        if mcp_input_config.get("origin_agent_id"):
+            result["input_required"]["origin_agent_id"] = mcp_input_config["origin_agent_id"]
+
         if agent_type == "MCP_LLM_DELEGATE":
             result["message"] = (
                 "The workflow has paused and is delegating this execution step to YOU (the connected AI assistant). "
                 "Do NOT ask the user for this information. Read input_required.prompt, input_required.context, "
                 "and input_required.schema. Execute the task yourself using your own capabilities, "
                 "then immediately call submit_response(session_id, response) with the result."
+            )
+        elif agent_type == "HITL_VALIDATOR":
+            result["message"] = (
+                "A human review checkpoint has been reached for the output of "
+                f"{mcp_input_config.get('origin_agent_id', 'the prior step')}. Read input_required.context "
+                "(the output under review, plus any named source-of-truth material) and input_required.prompt "
+                "(what to look for). Do NOT silently approve on your own judgment — surface the output to the "
+                "actual user, ask clarifying questions if needed, and proactively point out any gaps or risks "
+                "you notice. Once the user has responded, call submit_response(session_id, response) with "
+                '{"status": "Approved"} or {"status": "Update", "feedback": "<what to change>"} per '
+                "input_required.schema."
             )
         else:
             result["message"] = (
@@ -400,7 +428,7 @@ def _compile_dependencies_context(agent_doc: dict, events: list) -> str:
     first_output = ""
     for event in events:
         attrs = event.get("attributes", {})
-        if attrs.get("event_type") == "VALIDATION" or attrs.get("validation_retry") == "true":
+        if attrs.get("event_type") == "VALIDATION" or attrs.get("validation_retry") == "true" or attrs.get("hitl_retry") == "true" or attrs.get("update_retry") == "true":
             continue
         src = event.get("data", {}).get("execution_context", {}).get("source_outputs", {})
         src_agent = src.get("source_agent_id")
@@ -409,7 +437,7 @@ def _compile_dependencies_context(agent_doc: dict, events: list) -> str:
             latest_outputs[src_agent] = content
             if not first_output:
                 first_output = content
-            
+
     if not dependencies:
         return first_output
         
@@ -454,6 +482,46 @@ async def _get_mcp_pause_config(doc: dict) -> dict | None:
     if mcp_pause_step_index is None:
         return None
 
+    # --- HITL_VALIDATOR gate ---
+    # This pause isn't a real DAG step — it's an attached human-review gate on the origin
+    # agent (mirrors how AI_VALIDATOR attaches, but must actually pause). Resolved directly
+    # from the pause event's own attributes rather than via workflow_definition.steps.
+    hitl_agent_id = mcp_pause_event.get("attributes", {}).get("hitl_pending_agent_id")
+    if hitl_agent_id:
+        ops_db = get_db()
+        hitl_agent_doc = await ops_db["agents"].find_one({"agentId": hitl_agent_id})
+        origin_source = mcp_pause_event.get("data", {}).get("execution_context", {}).get("source_outputs", {})
+        origin_agent_id = origin_source.get("source_agent_id", "")
+        origin_content = origin_source.get("content", "")
+
+        dep_context = _compile_dependencies_context(hitl_agent_doc, events)
+        hitl_context = f"# OUTPUT UNDER REVIEW ({origin_agent_id})\n{origin_content}"
+        if dep_context:
+            hitl_context += f"\n\n{dep_context}"
+
+        hitl_loop = int(mcp_pause_event.get("attributes", {}).get("hitl_loop", "0"))
+        if hitl_loop > 0:
+            # Re-pause after an "Update" — the feedback lives on the most recent hitl_retry
+            # bookkeeping event (logged by _handle_hitl_response), not on this fresh pause event.
+            last_retry = next(
+                (e for e in reversed(events) if e.get("attributes", {}).get("hitl_retry") == "true"),
+                None
+            )
+            prior_feedback = last_retry.get("data", {}).get("execution_context", {}).get("hitl_feedback", "") if last_retry else ""
+            if prior_feedback:
+                hitl_context += f"\n\n# YOUR PRIOR FEEDBACK (loop {hitl_loop})\n{prior_feedback}"
+
+        return {
+            "prompt": hitl_agent_doc.get("systemPrompt", "") if hitl_agent_doc else "",
+            "schema": hitl_agent_doc.get("inputSchema", {}) if hitl_agent_doc else {},
+            "context": hitl_context,
+            "step_index": mcp_pause_step_index,
+            "agent_id": hitl_agent_id,
+            "agent_type": "HITL_VALIDATOR",
+            "pause_kind": "hitl_feedback",
+            "origin_agent_id": origin_agent_id,
+        }
+
     # Find the matching step in the plan and confirm it is a MCP_PAUSE step.
     mcp_pause_step = next(
         (s for s in steps if s.get("step_index") == mcp_pause_step_index),
@@ -486,16 +554,35 @@ async def _get_mcp_pause_config(doc: dict) -> dict | None:
 
     context = _compile_dependencies_context(agent_doc, events)
 
-    # If this pause is a re-prompt after a failed validation, surface the prior
-    # attempt and the validator's feedback so the delegate can revise its answer.
+    # If this pause is a re-prompt after a failed validation or a human "Update" decision,
+    # surface the prior attempt and the reviewer's feedback so the delegate can revise its answer.
     pause_exec_ctx = mcp_pause_event.get("data", {}).get("execution_context", {}) if mcp_pause_event else {}
     validation_feedback = pause_exec_ctx.get("validation_feedback")
+    hitl_feedback = pause_exec_ctx.get("hitl_feedback")
+    update_feedback = pause_exec_ctx.get("update_feedback")
     if validation_feedback:
         previous_output = pause_exec_ctx.get("previous_output", "")
         prior_block = f"\n\n# YOUR PREVIOUS OUTPUT\n{previous_output}" if previous_output else ""
         context += (
             f"{prior_block}\n\n# VALIDATOR RESPONSE\n"
             f"Revise your previous output to address every issue raised below:\n{validation_feedback}"
+        )
+    if hitl_feedback:
+        previous_output = pause_exec_ctx.get("previous_output", "")
+        prior_block = f"\n\n# YOUR PREVIOUS OUTPUT\n{previous_output}" if previous_output else ""
+        context += (
+            f"{prior_block}\n\n# HUMAN REVIEWER RESPONSE\n"
+            f"Revise your previous output to address the feedback below:\n{hitl_feedback}"
+        )
+    if update_feedback:
+        # Either the directly-targeted agent of an update_session cascade, or a downstream
+        # agent reached mid-cascade whose upstream dependency just changed (see
+        # _emit_advance_event's cascade branch, which seeds these two fields).
+        previous_output = pause_exec_ctx.get("previous_output", "")
+        prior_block = f"\n\n# YOUR PREVIOUS OUTPUT\n{previous_output}" if previous_output else ""
+        context += (
+            f"{prior_block}\n\n# PROJECT UPDATE REQUEST\n"
+            f"Revise your previous output to address the requested change below:\n{update_feedback}"
         )
 
     schema = agent_doc.get("inputSchema", {}) if agent_doc else {}
@@ -551,6 +638,10 @@ def _aggregate_agent_index(events: list, human_agents: set) -> dict:
         if attrs.get("event_type") == "VALIDATION":
             continue
         if attrs.get("validation_retry") == "true":
+            continue
+        if attrs.get("hitl_retry") == "true":
+            continue
+        if attrs.get("update_retry") == "true":
             continue
         src = event.get("data", {}).get("execution_context", {}).get("source_outputs", {})
         agent_id = src.get("source_agent_id")
@@ -827,6 +918,88 @@ async def cancel_session(session_id: str) -> str:
         "message": "Session cancelled."
     })
 
+
+# ─────────────────────────────────────────────
+# Tool: update_session
+# ─────────────────────────────────────────────
+@mcp.tool(name="update_session", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+async def update_session(session_id: str, agent_id: str, update_content: str) -> str:
+    """
+    Revise one agent's output in an already-finished workflow session and cascade the change
+    through every downstream agent that depends on it.
+
+    Only works on a session whose status is COMPLETED or CANCELLED. If it is IN_PROGRESS or
+    AWAITING_INPUT, call cancel_session(session_id) first, then retry this call.
+
+    Args:
+        session_id: The session_id of a COMPLETED or CANCELLED session (from list_sessions).
+        agent_id:   The agent whose output to revise — an agent_id from get_outputs' available_outputs.
+        update_content: What should change, in your own words.
+
+    Returns:
+        Confirmation the cascade has started — poll_workflow(session_id) exactly like a fresh run.
+    """
+    if not agent_id or not agent_id.strip():
+        raise ValueError("agent_id must be a non-empty string.")
+    if not update_content or not update_content.strip():
+        raise ValueError("update_content must be a non-empty string.")
+    if len(update_content) > 20000:
+        raise ValueError("update_content exceeds 20,000 character limit.")
+
+    db = get_db(os.environ.get("RAW_EVENTS_DB_NAME", "speakmanai_db"))
+    COLLECTION = os.environ.get("RAW_EVENTS_COLLECTION", "events_raw")
+
+    doc = await db[COLLECTION].find_one({"session_id": session_id})
+    if not doc:
+        raise RuntimeError(f"Session {session_id} not found.")
+
+    events = doc.get("events") or []
+    if not events:
+        raise RuntimeError(f"Session {session_id} has no recorded steps to update.")
+    workflow_def = events[0].get("data", {}).get("workflow_definition", {})
+
+    entry_step_idx = resolve_agent_step_index(workflow_def, agent_id)
+    if entry_step_idx is None:
+        human_agents = await _build_human_exclusion_set(events)
+        available = sorted(_aggregate_agent_index(events, human_agents).keys())
+        raise RuntimeError(
+            f"Agent '{agent_id}' not found in session {session_id}'s workflow. "
+            f"Available agent_ids: {available}"
+        )
+
+    clean_update_content = scrub_pii(update_content)
+
+    # This single atomic conditional transition IS the guard AND the idempotency mechanism —
+    # only a COMPLETED/CANCELLED session can win it, and only one of two racing callers ever
+    # can. No new state is touched before this call succeeds.
+    won = await transition_completed_or_cancelled_to_draft(session_id, db)
+    if not won:
+        refreshed = await db[COLLECTION].find_one({"session_id": session_id}) or {}
+        current_status = refreshed.get("current_status", "UNKNOWN")
+        raise RuntimeError(
+            f"Session {session_id} cannot be updated right now (status: {current_status}). "
+            "update_session only works on a COMPLETED or CANCELLED session. If it is IN_PROGRESS "
+            "or AWAITING_INPUT, call cancel_session(session_id) first, then retry update_session. "
+            "If it is already DRAFT, an update is already in progress — poll_workflow instead."
+        )
+
+    await workflow_queue.put({
+        "action": "update_session",
+        "session_id": session_id,
+        "agent_id": agent_id,
+        "update_content": clean_update_content,
+    })
+
+    return json.dumps({
+        "ok": True,
+        "session_id": session_id,
+        "agent_id": agent_id,
+        "message": (
+            f"Update accepted for {agent_id}. The workflow is regenerating its output and every "
+            "downstream agent that depends on it. Call poll_workflow(session_id) every 15-30 "
+            "seconds until COMPLETED, then get_outputs/get_output for the refreshed content."
+        ),
+    }, indent=2)
 
 
 # ─────────────────────────────────────────────

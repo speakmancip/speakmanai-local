@@ -373,6 +373,41 @@ class SQLiteCollection:
 
         await conn.commit()
 
+    async def update_one_if(
+        self, filter: dict, update: dict, *, expected_field: str, expected_values: list
+    ) -> bool:
+        """Atomic conditional update for events_raw (sessions table) only — a single filtered
+        SQL UPDATE, not the find_one()-then-write pattern every other method here uses. Returns
+        True iff a row was actually changed, i.e. the row existed AND expected_field currently
+        held one of expected_values at UPDATE time. This is what makes it CAS-safe: only one of
+        two racing callers can ever see rowcount > 0 for the same transition. Only $set is
+        supported — this is a status-guard primitive, not general event-log writing.
+        expected_field is always an internal, hardcoded caller value (never derived from
+        external input) — it is interpolated directly into the SQL column list.
+        """
+        if self._name != "events_raw":
+            raise NotImplementedError("update_one_if is only implemented for events_raw (sessions table).")
+        session_id = filter.get("session_id")
+        if not session_id:
+            return False
+        conn = await _ensure_conn()
+        set_fields = update.get("$set", {})
+        col_map = {
+            "current_status": "current_status",
+            "session_title":  "session_title",
+            "owner_id": "owner_id",
+            "error_message":  "error_message",
+        }
+        set_pairs = [(col_map[k], v) for k, v in set_fields.items() if k in col_map]
+        set_pairs.append(("updated_at", datetime.now(timezone.utc).isoformat()))
+        cols_sql = ", ".join(f"{c} = ?" for c, _ in set_pairs)
+        vals = [v.isoformat() if isinstance(v, datetime) else v for _, v in set_pairs]
+        placeholders = ", ".join("?" for _ in expected_values)
+        sql = f"UPDATE sessions SET {cols_sql} WHERE session_id = ? AND {expected_field} IN ({placeholders})"
+        cur = await conn.execute(sql, vals + [session_id] + list(expected_values))
+        await conn.commit()
+        return cur.rowcount > 0
+
     # ── kv_store: workflows, agents, projects, settings ──────────
 
     def _pk_field(self) -> str:

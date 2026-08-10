@@ -1,5 +1,32 @@
 # Release Notes
 
+## v1.2.0
+
+**Release:** https://github.com/speakmancip/speakmanai-local/releases/tag/v1.2.0
+**Announcement:** https://consulting.speakman.ai/blogs/speakmanai-v1-2-0
+
+### Headline features
+
+**1. Human-in-the-loop revision gates — `HITL_VALIDATOR`**
+Any agent can now pause for a real human to review and either approve or send back with feedback, structurally parallel to the existing automated `AI_VALIDATOR` gate but driven by a person instead of a score. When an agent has both, the automated check always runs first — a human never spends time catching what a validator already could have. Revisions loop with the agent's own prior output plus the reviewer's feedback attached, up to a configurable retry limit, then force-advance rather than block forever.
+
+**2. Delegate-first execution — hand a step to your own connected coding agent**
+Any workflow step can now declare `executionMode: "delegate"`. Instead of a background model call, the engine pauses and hands the step to whichever coding agent is connected (Claude Code today), which executes it with real tools — filesystem, web fetch, your own MCP servers — instead of a human being asked to paste data in by hand. A new companion generator, `generate-speakmanai-skill-workflow`, builds workflows this way from the start.
+
+**3. `update_session` — revise a finished session without starting over**
+A new MCP tool reopens an already-completed session, revises one agent's output in light of new information, and cascades the change through everything that depends on it — nothing unaffected gets touched, and nothing gets regenerated from a blank slate. Every revised agent, from the one directly targeted to the last agent downstream, sees its own prior output and what changed, and revises in place rather than starting over. Guarded by the first genuinely atomic state transition in this codebase, so a duplicate or concurrent call can never double-run a revision.
+
+**4. New workflow: UX & Interface Design**
+A new built-in pipeline (`MCP_UX_DESIGN_V1`) maps architecture components and requirements into a screen inventory, checks that nothing traces back to a missing requirement, then proposes a design direction and produces clickable, self-contained HTML mockups for a human to actually react to — before any real code gets written. The design step runs through your connected coding agent rather than a fixed background model, since design judgment is exactly where the model behind that connection matters most.
+
+### Under the hood
+- Consolidated five separate, drifting copies of the workflow planner agent into one shared definition — found live, including one copy with a silently empty prompt that a `.get(key, default)` fallback bug let slip through undetected
+- Fixed a real dedup bug where a human review loop could leave stale, superseded sections behind in an assembled project document
+- Automated validators now actually read the dependency context their own prompts assumed they had — previously they only ever saw a primary agent's raw output, never the source-of-truth material it was checked against
+- Every workflow-generator meta-tool now understands `HITL_VALIDATOR` as a first-class option alongside the existing automated validator
+
+---
+
 ## v1.1.0
 
 **Release:** https://github.com/speakmancip/speakmanai-local/releases/tag/v1.1.0
