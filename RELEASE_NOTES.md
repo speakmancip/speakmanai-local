@@ -1,5 +1,19 @@
 # Release Notes
 
+## v1.2.1
+
+**Release:** https://github.com/speakmancip/speakmanai-local/releases/tag/v1.2.1
+
+### Expanded human review coverage
+
+Every built-in workflow now has a human sign-off gate on the agents whose output ships straight into a delivered artifact with nothing else checking it first. `MCP_REQUIREMENTS_ENGINEERING_V1` gained six `HITL_VALIDATOR` gates — one each on the use case catalog, domain model, field definitions, naming dictionary, API schema, and database schema — replacing two older plain-pause review steps with the same revise-in-place loop the rest of the platform already uses. Three more workflows picked up a gate apiece: the Compliance Officer in Solution Architecture (previously the only agent in that pipeline with zero checks of any kind), the UX Needs Analyst in UX Design (the screen-inventory step everything downstream is built on), and the Sizing Context Clarifier in Sizing Estimate (the only agent reading raw business input, with nothing downstream able to catch a wrong reading).
+
+### Also fixed
+
+A workflow-generator meta-tool (`CLAUDE_WORKFLOW_CREATOR_V1`) had a dangling dependency on an agent ID that never existed — a leftover typo from before the shared planner was consolidated under one name.
+
+---
+
 ## v1.2.0
 
 **Release:** https://github.com/speakmancip/speakmanai-local/releases/tag/v1.2.0

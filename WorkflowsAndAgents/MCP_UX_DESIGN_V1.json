@@ -25,6 +25,8 @@
       "mimeType": "application/json",
       "validatorAgentId": "UX_TRACEABILITY_VALIDATOR_V1",
       "validationConfig": {"maxLoops": 3, "minScore": 7.0},
+      "humanFeedbackId": "UX_NEEDS_HITL_V1",
+      "humanFeedbackConfig": {"maxLoops": 3},
       "minSubscriptionLevel": "trial",
       "workflows": ["MCP_UX_DESIGN_V1"],
       "inputSchema": "{}",
@@ -85,6 +87,24 @@
       "agentType": "HITL_VALIDATOR",
       "systemPrompt": "Review the proposed design_system and mockups against the screen inventory also provided as context. Structural/coverage checks (do the mockups reflect the right data fields and actions) have not been separately automated here — look for that yourself alongside the judgment calls only a human can make:\n- Does the direction (palette, type, layout concept) actually fit the business and its target users, or does it read generic?\n- If a brand source was referenced, does the direction genuinely match what's really there, or does it look guessed?\n- Are the mockups consistent with each other (same direction applied throughout), and do they reflect the real screens/data from the inventory rather than a rough approximation?\n- Is this something you'd actually want to build toward?\nApprove if it's a real, usable direction — refinement can continue later in Phase 3. If not, describe exactly what to change (a specific color, a layout call, a missing screen) rather than asking for a generic redo.\nRequire output of exactly {\"status\": \"Approved\"|\"Update\", \"feedback\": \"<string, required when status is Update>\"}.",
       "dependencies": ["UX_NEEDS_ANALYST_V1"],
+      "minSubscriptionLevel": "trial",
+      "workflows": ["MCP_UX_DESIGN_V1"],
+      "inputSchema": {
+        "type": "object",
+        "required": ["status"],
+        "properties": {
+          "status": {"type": "string", "enum": ["Approved", "Update"]},
+          "feedback": {"type": "string", "description": "Required when status is Update — describe exactly what to change and why."}
+        }
+      }
+    },
+    {
+      "agentId": "UX_NEEDS_HITL_V1",
+      "displayName": "Screen Inventory Human Review",
+      "description": "Human-in-the-loop review gate attached to UX_NEEDS_ANALYST_V1 via humanFeedbackId. Runs AFTER the automated UX_TRACEABILITY_VALIDATOR_V1 validator has already passed (or exhausted its own retries) — this is the human sign-off on which screens exist and what's in/out of scope, before the flow diagrams and the delegate mockup step are built on top of it.",
+      "agentType": "HITL_VALIDATOR",
+      "systemPrompt": "Review the screen inventory above (ui_surfaces, unmapped_requirements, brand_source_reference). Coverage and internal consistency have already passed automated scoring — focus on judgment calls an algorithm can't make:\n- Is any screen you'd expect for this kind of product missing entirely — not unmapped from a requirement, just never considered (e.g. an admin/settings surface, an onboarding flow)?\n- For anything left out, was it actually scoped out on purpose, or is it a real gap? If you're not sure, treat it as worth asking about now — it's much cheaper to catch here than after mockups exist.\n- Do the screens on each surface reflect genuinely distinct user goals, or is a screen doing too much / a goal split unnecessarily across two screens?\n- If a brand_source_reference is set, is it actually a fetchable source (real URL/file), not something vague the mockup step won't be able to use?\n\nApprove if the inventory is complete and the scope is right. If something needs to change — a missing screen, a wrong scope call — describe exactly what and why: the analyst will regenerate using your feedback plus its original input.\nRequire output of exactly {\"status\": \"Approved\"|\"Update\", \"feedback\": \"<string, required when status is Update>\"}.",
+      "dependencies": [],
       "minSubscriptionLevel": "trial",
       "workflows": ["MCP_UX_DESIGN_V1"],
       "inputSchema": {

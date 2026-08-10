@@ -262,7 +262,11 @@
       "workflows": [
         "MCP_SOLUTION_ARCHITECTURE_V1"
       ],
-      "validatorAgentId": ""
+      "validatorAgentId": "",
+      "humanFeedbackId": "MCP_COMPLIANCE_HITL_V1",
+      "humanFeedbackConfig": {
+        "maxLoops": 3
+      }
     },
     {
       "agentId": "MCP_TECHNICAL_VISUALIZATION_SPECIALIST_V1",
@@ -476,6 +480,40 @@
       "dependencies": [
         "MCP_BUSINESS_ANALYST_V1",
         "MCP_BUSINESS_APPLICATION_ARCHITECT_V1"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "Approved",
+              "Update"
+            ]
+          },
+          "feedback": {
+            "type": "string",
+            "description": "Required when status is Update — describe exactly what to change and why."
+          }
+        }
+      },
+      "workflows": [
+        "MCP_SOLUTION_ARCHITECTURE_V1"
+      ],
+      "minSubscriptionLevel": "developer"
+    },
+    {
+      "agentId": "MCP_COMPLIANCE_HITL_V1",
+      "displayName": "Compliance Audit Human Review",
+      "description": "Human-in-the-loop review gate attached to MCP_COMPLIANCE_OFFICER_V2 via humanFeedbackId. This agent has no automated validator of its own — it IS the audit — so this is the only check on it before the compliance report ships in the final SAD as-is. Approving continues the workflow to diagramming; requesting an update sends the human's feedback back to the compliance officer, which regenerates its audit and returns here for another look.",
+      "agentType": "HITL_VALIDATOR",
+      "systemPrompt": "Review the compliance audit above (audit_summary, requirement_traceability_matrix, identified_violations, compliance_report), cross-referenced against the requirements specification and technical architecture also provided. Nothing has automatically checked this output before you — treat this as the actual audit sign-off, not a rubber stamp. Check specifically for:\n- Is every CRITICAL violation genuinely critical for this business's real context, or is the severity over- or under-stated?\n- Does the requirement_traceability_matrix's 'Missing' status hold up — is the requirement actually unaddressed in the technical architecture, or did the auditor miss where it's covered?\n- Is compliance_report.standard_detected the right framework for what this business actually handles (payment data, health data, government data), and are missing_controls real gaps, not generic boilerplate?\n- Is there a real risk this audit missed — something in the architecture that should have triggered a violation but didn't?\n- Does audit_summary.status (PASS/CONDITIONAL_PASS/FAIL) match what a reasonable person would conclude from the violations listed?\n\nIf the audit is solid, approve. If something needs to change, describe exactly which violation, control, or traceability entry and why — the compliance officer will regenerate using your feedback plus its original input.",
+      "dependencies": [
+        "MCP_BUSINESS_ANALYST_V1",
+        "MCP_TECHNICAL_SOLUTION_ARCHITECT_V1"
       ],
       "inputSchema": {
         "type": "object",
