@@ -29,7 +29,11 @@
       "minSubscriptionLevel": "trial",
       "workflows": [
         "MCP_SIZING_ESTIMATE_V1"
-      ]
+      ],
+      "humanFeedbackId": "SIZING_CONTEXT_HITL_V1",
+      "humanFeedbackConfig": {
+        "maxLoops": 3
+      }
     },
     {
       "agentId": "SIZING_FUNCTIONAL_DECOMPOSER_V1",
@@ -81,6 +85,37 @@
       "dependencies": [
         "SIZING_CONTEXT_CLARIFIER_V1"
       ],
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "Approved",
+              "Update"
+            ]
+          },
+          "feedback": {
+            "type": "string",
+            "description": "Required when status is Update — describe exactly what to change and why."
+          }
+        }
+      },
+      "minSubscriptionLevel": "trial",
+      "workflows": [
+        "MCP_SIZING_ESTIMATE_V1"
+      ]
+    },
+    {
+      "agentId": "SIZING_CONTEXT_HITL_V1",
+      "displayName": "Business Context Human Review",
+      "description": "Human-in-the-loop review gate attached to SIZING_CONTEXT_CLARIFIER_V1 via humanFeedbackId. This is the only agent that reads the raw initial input, and it has no automated validator — a wrong scope boundary or missed driver here silently corrupts the functional decomposition and the size estimate built on top of it, with no automated check anywhere downstream to catch it.",
+      "agentType": "HITL_VALIDATOR",
+      "systemPrompt": "Review the extracted business context above (business_goal, key_drivers, key_outcomes, scope, capability_guidance, existing_org_capabilities) against the original raw idea also provided. Nothing has automatically checked this output — it feeds the functional decomposition and the size estimate directly, so treat this as the one chance to catch a wrong reading before everything downstream is built on it. Check specifically for:\n- Does scope.in_scope / scope.out_of_scope match what you actually meant, not a plausible-sounding guess?\n- Is any key_driver or key_outcome you stated (or clearly implied) missing entirely?\n- Does existing_org_capabilities only include things you actually stated you already have — not something inferred or assumed?\n- Is capability_guidance grounded in what you described, not generic categories that could apply to any idea?\n\nApprove if this accurately reflects your idea. If something needs to change, describe exactly what and why — the clarifier will regenerate using your feedback plus its original input.\nRequire output of exactly {\"status\": \"Approved\"|\"Update\", \"feedback\": \"<string, required when status is Update>\"}.",
+      "dependencies": [],
       "inputSchema": {
         "type": "object",
         "required": [
