@@ -141,3 +141,93 @@ The correct pattern (confirmed against the enterprise product's own convention) 
 **Explicitly out of scope (deferred, not forgotten):** no caller-supplied idempotency key (session_id already serves this role), no cross-SDLC-phase orchestration (a human re-running a downstream phase skill against the same session_id, once it exists, is the whole integration for now), no direct-content-replacement mode (every revision goes through the real agent/LLM, never a raw patch), no natural-language change-detection (the caller states `agent_id` + `update_content` explicitly).
 
 **Porting notes:** The CAS primitive (`update_one_if`) is SQLite-shim-specific; enterprise/Mongo mode gets the same guarantee natively via a filtered `update_one`, already confirmed in code. The cascade mechanics (`_resolve_downstream_agents`, the `cascade` threading pattern, the `update_retry` marker family) are fully portable as-is — they only depend on the DB abstraction's existing `find`/`update_one` interface, not anything SQLite-specific.
+
+---
+
+## FIXED (2026-08-11): multi-agent steps silently drop every agent but one
+
+**Status:** Diagnosed and fixed same day. Confirmed by the user to be an old, latent bug present since the engine's original design, not something introduced by this session's HITL work. Confirmed the enterprise version does not have this limitation.
+
+**Fix applied:** both parts of the recommended fix below were implemented — `_handle_start` and `_handle_resume`'s delegated-planner-resume path now split any planner-generated step with more than one agent into separate sequential single-agent steps (step_type recomputed per agent, `step_index` renumbered across the whole list) before execution ever begins, so nothing can silently drop again regardless of what the planner outputs. `GENERIC_WORKFLOW_PLANNER`'s systemPrompt was also updated to instruct exactly one agent ID per step. Verified: `engine.py` compiles clean; both prompt-only sibling fixes in this file were live-imported into the DB. The engine-code half needs a rebuilt exe + server restart to take effect (compiled code, not DB-loaded).
+
+**What:** `_handle_process_step` (`engine.py`, ~line 1071) executes only `agent_configs[0]` when a workflow step's `agents` array contains more than one agent ID — every other agent in that step is silently dropped. No error, no log warning, no partial-completion marker. The comment already on that line names this as a deliberate simplification: `# For this stripped-down local version, we assume sequential execution (one agent per step)`.
+
+**Why it surfaced now:** Workflows that use the dynamic `GENERIC_WORKFLOW_PLANNER` (i.e. every non-`system`-type workflow) get a *freshly LLM-generated* step graph on every session run — nothing guarantees the planner keeps independent agents in separate steps. Caught live on a real `MCP_SOLUTION_ARCHITECTURE_V1` run ("HelpSell.ca Solution Architecture", `session-a8c7072b-...`): the planner bundled `MCP_TECHNICAL_VISUALIZATION_SPECIALIST_V1` and `MCP_COMPLIANCE_OFFICER_V2` into one step (`step_index: 5`, both agents in the same `agents` array, both depending only on `MCP_TECHNICAL_SOLUTION_ARCHITECT_V1`) — a legitimate reading of the dependency graph, since neither depends on the other. Only the Visualization Specialist ran; the Compliance Officer (and its brand-new `MCP_COMPLIANCE_HITL_V1` gate, added this session) never fired at all. Confirmed via direct inspection of the session's `workflow_definition` and event log in the SQLite DB — the DB registration of the agent (dependencies, `humanFeedbackId`) was completely correct; this is purely a runtime execution gap.
+
+**Non-determinism note:** `agent_configs[0]` isn't even deterministically "the first agent listed in the step's `agents` array" — `database_sqlite.py`'s `$in` query (`_kv_fetch_all` → `_matches`) doesn't preserve input-array order, so which of the bundled agents silently wins is effectively arbitrary per run.
+
+**Blast radius:** Any workflow using the dynamic planner (every built-in workflow except `system`-type ones) can hit this any time two or more agents in the dependency graph happen to share the same upstream dependency and the planner decides to co-locate them. Plausible this has silently dropped content on past runs of other workflows too, just unnoticed because nothing was watching closely enough to catch it — this is the first time a HITL gate on the dropped agent made the omission visible.
+
+**Recommended fix (not yet implemented), two parts:**
+1. **Engine-level, defensive/deterministic:** after the planner returns its step list in `_handle_start` (and the equivalent post-processing in `_handle_resume`'s delegated-planner-resume path), split any step with more than one agent (except genuine `AI_AGGREGATOR`/`AGGREGATE` steps, which are fan-in by design) into separate sequential single-agent steps, renumbering `step_index` and fixing up `dependencies`. Guarantees correctness regardless of what the planner does.
+2. **Prompt-level, reduces how often splitting is even needed:** teach `GENERIC_WORKFLOW_PLANNER`'s systemPrompt that every step's `agents` array must contain exactly one agent ID — parallel-eligible agents still get separate sequential steps, since this engine has no true parallel-execution model (one scalar `current_step_index` per session).
+
+**Touches (once fixed):** `orchestration/mcp-server/engine.py` (`_handle_start`, `_handle_resume`), the `GENERIC_WORKFLOW_PLANNER` agent doc's `systemPrompt`.
+
+**Porting notes:** User confirmed the enterprise version handles this correctly already (real parallel step execution, not the single-agent-per-step simplification this stripped-down local engine assumes) — nothing to port for this one, it's a lite-only gap being closed to match parity, not a lite-only feature to carry upstream.
+
+---
+
+## FIXED (2026-08-11): Use Case Analyst caps at 1 happy + 1 unhappy scenario per use case
+
+**Status:** Found and fixed same day. Found via a real `MCP_REQUIREMENTS_ENGINEERING_V1` run (10 use cases, exactly 20 scenarios — 1 happy + 1 unhappy each, no exceptions), surfaced specifically because the new `RE_USE_CASE_HITL_V1` gate (added this session) put a human in front of the catalog and prompted the "is this actually enough coverage?" question an AI-only validator wasn't asking.
+
+**Fix applied:** all three recommended changes below were implemented in `RE_USE_CASE_ANALYST_V1` and `RE_USE_CASE_VALIDATOR_V1`'s systemPrompts and live-imported into the DB — instruction rewritten to require one unhappy scenario per applicable category (not "at least one" total) and allow multiple happy paths where genuinely warranted, example schema expanded from 1 to 3 scenario objects, and the validator's check #2 rewritten to verify per-category coverage by name rather than a non-zero unhappy count.
+
+**What:** `RE_USE_CASE_ANALYST_V1` reliably produces exactly one happy-path and one unhappy-path scenario per use case, even when a use case genuinely has multiple distinct failure modes (e.g. invalid input *and* a business-rule violation *and* an auth failure, all realistically applicable to the same UC) or multiple valid entry patterns worth its own happy-path scenario.
+
+**Why — three compounding causes, all in `RE_USE_CASE_ANALYST_V1`'s own systemPrompt:**
+1. The instruction sets only a floor: "the happy path and *at least one* unhappy path." It separately lists 4 failure categories that scenarios "must cover... where applicable" (invalid input, auth failure, resource not found, business rule violations), but never says *one scenario per applicable category* — so a single vague unhappy scenario gesturing at several categories at once technically satisfies the instruction.
+2. The JSON example schema embedded in the prompt shows exactly **one** scenario object in the `scenarios` array. LLMs pattern-match a single-example schema's cardinality even when the prose says "at least" — this is likely doing more work to anchor the 1-and-1 output than the prose itself.
+3. `RE_USE_CASE_VALIDATOR_V1`'s own bar is the same floor — check #2 is just "every UC has at least one scenario with type 'unhappy'," never whether more categories genuinely applied and got collapsed into one. A thin catalog still scores 8-10 and never gets sent back for revision.
+
+**Recommended fix (not yet implemented):**
+- Rewrite `RE_USE_CASE_ANALYST_V1`'s instruction to require one unhappy scenario **per applicable category**, not "at least one" total — and allow multiple happy-path scenarios when a use case genuinely has more than one valid entry pattern.
+- Expand the embedded JSON example schema to show 2-3 scenario objects instead of 1, so the few-shot cardinality signal matches the intended range.
+- Tighten `RE_USE_CASE_VALIDATOR_V1` check #2 to verify category coverage, not just a non-zero unhappy count.
+
+**Touches (once fixed):** `WorkflowsAndAgents/MCP_REQUIREMENTS_ENGINEERING_V1.json` — `RE_USE_CASE_ANALYST_V1` and `RE_USE_CASE_VALIDATOR_V1` systemPrompts only. No engine code changes needed — this is a prompt-quality gap, not a runtime bug.
+
+**Porting notes:** Prompt-only fix, portable to the enterprise version's equivalent use-case agent (if one exists) with no engine dependency either way.
+
+---
+
+## FIXED (2026-08-11): Domain Modeler doesn't reconcile domain_events against every use case on the first pass
+
+**Status:** Found and fixed same day, same root-cause family as the Use Case Analyst gap above — surfaced via the `RE_DOMAIN_HITL_V1` gate on a real `MCP_REQUIREMENTS_ENGINEERING_V1` run. Already self-corrected for that specific session via the normal HITL revise-in-place loop (see below) — this entry originally tracked the underlying prompt gap, now closed at the source too.
+
+**Fix applied:** added a "MANDATORY GATE — domain event reconciliation" instruction to `RE_DOMAIN_MODELER_V1`'s systemPrompt (mirrors the proven `Phase_3_Self_Coverage_Check` pattern already used in `MCP_BUSINESS_ANALYST_V1`), requiring every state-changing scenario across the full use case catalog to have a corresponding `domain_events` entry before output is emitted, plus a `source_use_case` field on each event for traceability. `RE_DOMAIN_VALIDATOR_V1` also gained a 6th check verifying this same reconciliation, naming any scenario with no corresponding event. Both live-imported into the DB.
+
+**What:** `RE_DOMAIN_MODELER_V1`'s first-pass output can under-cover the use case catalog it was given — aggregates get modeled correctly, but not every use case's distinct state transitions make it into `domain_events`. On the run that surfaced this, the use case catalog had just been revised via `RE_USE_CASE_HITL_V1` to add UC-11 (subscription trial-to-paid transition, including a failed-auto-charge scenario) and UC-12 (listing cancellation) — the modeler's first pass correctly built out `Storefront` and `Listing` aggregates (proving it *did* see both new use cases) but only emitted `StorefrontTrialExpired`, with no `ListingCancelled`/`ListingWithdrawn` event and no distinct payment-failure event (`StorefrontPaymentFailed` or similar) for UC-11's failed-charge path.
+
+**Confirmed NOT a stale-data bug — verified, not assumed:** replayed the exact `_compile_dependencies_context` last-write-wins scan against the real event log up to the moment the Domain Modeler's first pass ran, and confirmed it received all 12 use cases (including UC-11/UC-12) as input context. The gap is purely in generation completeness, not context retrieval — structurally identical to the Use Case Analyst finding above, just one agent downstream.
+
+**Already resolved for that session:** the `RE_DOMAIN_HITL_V1` gate caught it, the human's "Update" feedback triggered a regeneration, and the second pass correctly added both `ListingCancelled` and `StorefrontPaymentFailed` — that revised output is the approved record the session advanced on. Nothing to clean up in that session's data.
+
+**Recommended fix (not yet implemented):** add an explicit reconciliation instruction to `RE_DOMAIN_MODELER_V1`'s systemPrompt — for every use case in the input catalog, confirm at least one `domain_events` entry corresponds to each of its distinct scenarios/state transitions (happy and unhappy alike, once the Use Case Analyst fix above lands and starts producing more scenarios per use case), not just that the owning aggregate exists.
+
+**Touches (once fixed):** `WorkflowsAndAgents/MCP_REQUIREMENTS_ENGINEERING_V1.json` — `RE_DOMAIN_MODELER_V1` systemPrompt only. No engine changes.
+
+**Porting notes:** Prompt-only fix, same portability profile as the Use Case Analyst gap above.
+
+---
+
+## FIXED (2026-08-11): HITL loop-cap silently discards the human's final feedback
+
+**Status:** Found and fixed same day, on a real `MCP_REQUIREMENTS_ENGINEERING_V1` run, `RE_API_SCHEMA_HITL_V1` gate. Confirmed via direct event-log inspection, not inferred. Was the most urgent of this batch — silently dropped real human input with zero signal to the client.
+
+**Fix applied — both parts:**
+1. **Loop-cap bug:** `_handle_hitl_response` no longer short-circuits on `status == "Approved" or (hitl_loop + 1) >= max_loops` — only an actual `"Approved"` advances immediately. Every `"Update"` now always triggers a real regeneration, cap or no cap. The cap check moved to the single choke point every path already flows through before pausing or advancing — `_maybe_gate_by_hitl` — which now compares `hitl_loop >= max_loops` and, if exhausted, calls `_emit_advance_event` with the **freshly regenerated** content (not stale pre-round content) instead of writing another pause event. A new `hitl_cap_reached: "true"` marker is stamped on that advance event for auditability (deliberately NOT added to any last-write-wins skip-filter, since this event carries genuinely new, real content that downstream context-compilation must still pick up). This required zero changes to `_handle_process_step` or `_handle_validate_step` — both already thread `hitl_loop` correctly through validator-retry sub-loops into whichever `_maybe_gate_by_hitl` call eventually fires, confirmed by re-reading the validator-retry branch (`hitl_loop` preserved unchanged across `validation_retry` events).
+2. **Regeneration-fidelity mitigation:** `_handle_process_step`'s three feedback-injection blocks (`validation_feedback`, `hitl_feedback`, `update_feedback` — shared by every revise-in-place loop platform-wide, not just HITL) now all prepend a shared `PRESERVE_INSTRUCTION`: "this is a targeted revision, not a rewrite... everything else in your previous output... must carry over exactly as it was." Applies uniformly to every agent using any of these three revision paths, not just the API Schema Designer.
+
+**What:** `_handle_hitl_response` (`engine.py`, line 633): `if status == "Approved" or (hitl_loop + 1) >= max_loops:`. Hitting the loop cap is treated identically to the human explicitly approving — the step force-advances using the **stale pre-round content**, and whatever feedback the human just submitted in that final "Update" is discarded entirely. The only trace is a server-side log line (`"Advancing despite unresolved feedback"`) the MCP client never sees. Confirmed live: on a 3-round (`maxLoops: 3`) API Schema Designer HITL loop, the human's 3rd "Update" submission (a precise, well-scoped "two focused fixes, preserve everything else" feedback) triggered this branch — the session's final `COMPLETED` content is byte-identical to round 2's output; the 3rd round's feedback was never applied to anything.
+
+**Compounding factor found in the same incident (separate, real issue, not a data bug):** verified the injection pipeline itself is correct — replayed the actual round-3 retry event and confirmed `previous_output` was exactly the prior round's real content and `hitl_feedback` was the human's full, explicit text. Despite that, the round-2→round-3 regeneration regressed on several things the feedback explicitly said to preserve (component schemas that existed in round 2 disappeared in round 3, a size cap was lost, a previously-removed redundant field came back) while still failing to apply either of the two requested fixes. This is a genuine LLM full-document-regeneration reliability problem on large structured outputs (this schema was ~40-50K characters) — the model isn't doing a faithful minimal edit even when told exactly what to preserve, and it compounds with the loop-cap bug above: by the time the cap silently discards feedback, the "stale" content it force-advances with may already have regressed from an earlier, better round.
+
+**Recommended fix (not yet implemented):**
+1. **Loop-cap bug (engine, clear win):** on the final permitted "Update," attempt one last regeneration incorporating the feedback before force-advancing, instead of discarding it outright — and/or surface a clear signal in the tool response that the loop cap was hit and the final feedback may not be reflected, so the human knows to use `update_session` afterward if it matters.
+2. **Regeneration-fidelity problem (harder, needs discussion):** the generic HITL-feedback injection block in `_handle_process_step` (shared by every HITL-gated agent platform-wide) could add an explicit "anything not called out above must be preserved character-for-character" instruction, rather than relying solely on the human's own feedback wording to say so. Worth checking whether this is model/provider-dependent (same class of concern already noted for the UX Design delegate step — weaker models handling large structured edits worse). Per-agent `maxLoops` is already configurable — bumping it for schema-heavy agents specifically is a cheap interim mitigation, though it doesn't fix the underlying drift.
+
+**Touches (once fixed):** `orchestration/mcp-server/engine.py` (`_handle_hitl_response` for the loop-cap fix; `_handle_process_step`'s injection block for the fidelity mitigation).
+
+**Porting notes:** The loop-cap silent-discard behavior should be checked against the enterprise version's equivalent HITL mechanism if one exists — not yet confirmed either way.

@@ -498,7 +498,7 @@ async def transition_completed_or_cancelled_to_draft(session_id: str, db) -> boo
     return getattr(result, "matched_count", 0) > 0
 
 
-async def _emit_advance_event(session_id: str, db, queue: asyncio.Queue, workflow_def: dict, current_step_idx: int, agent_id: str, content: str, cascade: dict = None):
+async def _emit_advance_event(session_id: str, db, queue: asyncio.Queue, workflow_def: dict, current_step_idx: int, agent_id: str, content: str, cascade: dict = None, hitl_cap_reached: bool = False):
     """Advances the workflow past current_step_idx using `content` as the accepted output of
     agent_id, or marks the session COMPLETED if this was the final step. Shared by the plain
     AI-step path, the delegate-resume path, and the AI_VALIDATOR/HITL_VALIDATOR PASS paths —
@@ -525,6 +525,8 @@ async def _emit_advance_event(session_id: str, db, queue: asyncio.Queue, workflo
         "status": status,
         "event_type": "MCP_PAUSE" if status == "AWAITING_INPUT" else "WORKFLOW"
     }
+    if hitl_cap_reached:
+        attrs["hitl_cap_reached"] = "true"
     exec_ctx = {"source_outputs": {"source_agent_id": agent_id, "content": content}}
 
     if cascade and not is_final:
@@ -566,6 +568,16 @@ async def _maybe_gate_by_hitl(session_id: str, db, queue: asyncio.Queue, workflo
 
     if not hitl_agent_id:
         await _emit_advance_event(session_id, db, queue, workflow_def, current_step_idx, agent_id, content, cascade=cascade)
+        return
+
+    max_loops = int((agent_config or {}).get("humanFeedbackConfig", {}).get("maxLoops", 3))
+    if hitl_loop >= max_loops:
+        # Loop budget exhausted. This content is the FRESH regeneration from the human's final
+        # feedback round (not stale pre-round content) — advance with it rather than re-pausing
+        # for a review round that would never resolve. hitl_cap_reached is a discoverable marker
+        # in the event log for anyone auditing why this agent didn't get a final human sign-off.
+        log.warning(f"[{session_id}] Agent {agent_id}: HITL loop budget ({max_loops}) exhausted. Advancing with the latest regenerated content instead of pausing again.")
+        await _emit_advance_event(session_id, db, queue, workflow_def, current_step_idx, agent_id, content, cascade=cascade, hitl_cap_reached=True)
         return
 
     log.info(f"[{session_id}] Agent {agent_id} requires human review by {hitl_agent_id}. Pausing (loop {hitl_loop})...")
@@ -627,16 +639,15 @@ async def _handle_hitl_response(event: dict, queue: asyncio.Queue):
         status = "Approved" if "approve" in raw_response.strip().lower() else "Update"
         feedback = raw_response
 
-    origin_config = await db["agents"].find_one({"agentId": origin_agent_id}) or {}
-    max_loops = int(origin_config.get("humanFeedbackConfig", {}).get("maxLoops", 3))
-
-    if status == "Approved" or (hitl_loop + 1) >= max_loops:
-        if status != "Approved":
-            log.warning(f"[{session_id}] Max HITL loops hit for {origin_agent_id}. Advancing despite unresolved feedback.")
+    if status == "Approved":
         await _emit_advance_event(session_id, db, queue, workflow_def, current_step_idx, origin_agent_id, origin_content, cascade=cascade)
         return
 
-    # "Update" — retry the origin agent with the human's feedback injected.
+    # "Update" — retry the origin agent with the human's feedback injected, even on what may be
+    # the final permitted loop: the regeneration still runs, so feedback is never silently
+    # discarded. _maybe_gate_by_hitl (reached once this regenerates, after any validator) is the
+    # sole place that caps how many times the gate re-pauses — once the cap is hit it
+    # force-advances with the FRESH regenerated content, not stale pre-round content.
     origin_step_type = steps[current_step_idx]["step_type"] if current_step_idx < len(steps) else None
     is_delegated_step = origin_step_type == "MCP_PAUSE"
     retry_status = "AWAITING_INPUT" if is_delegated_step else "IN_PROGRESS"
@@ -833,19 +844,37 @@ async def _handle_start(event: dict, queue: asyncio.Queue):
                 workflow_def["id"] = workflow_id
                 workflow_def["title"] = title
                 
-                # --- FORCE STEP TYPES ---
+                # --- FORCE STEP TYPES, THEN SPLIT MULTI-AGENT STEPS ---
+                # _handle_process_step only ever executes agent_configs[0] — a step the planner
+                # bundled multiple agents into would silently drop every agent but the first
+                # (and non-deterministically, since $in queries don't preserve order). Split any
+                # such step into separate sequential single-agent steps so nothing gets dropped,
+                # computing step_type per agent (not just the group's first) and renumbering
+                # step_index across the whole resulting list.
+                split_steps = []
                 for step in workflow_def.get("steps", []):
-                    if not step.get("agents"): continue
-                    agent_id = step["agents"][0]
-                    agent_doc = next((a for a in workflow_agents if a["agentId"] == agent_id), None)
-                    if agent_doc:
-                        a_type = agent_doc.get("agentType", "")
-                        a_exec_mode = agent_doc.get("executionMode", "auto")
-                        
-                        if a_type.startswith("MCP_"): step["step_type"] = "MCP_PAUSE"
-                        elif a_type == "AI_AGGREGATOR": step["step_type"] = "AGGREGATE"
-                        elif exec_mode == "auto" and a_exec_mode == "delegate": step["step_type"] = "MCP_PAUSE"
-                        else: step["step_type"] = "AI"
+                    agent_ids = step.get("agents") or []
+                    if not agent_ids:
+                        continue
+                    if len(agent_ids) > 1:
+                        log.warning(f"[{session_id}] Planner bundled {len(agent_ids)} agents into one step ({agent_ids}) — splitting into sequential steps.")
+                    for agent_id in agent_ids:
+                        agent_doc = next((a for a in workflow_agents if a["agentId"] == agent_id), None)
+                        new_step = {"agents": [agent_id], "dependencies": step.get("dependencies", [])}
+                        if agent_doc:
+                            a_type = agent_doc.get("agentType", "")
+                            a_exec_mode = agent_doc.get("executionMode", "auto")
+
+                            if a_type.startswith("MCP_"): new_step["step_type"] = "MCP_PAUSE"
+                            elif a_type == "AI_AGGREGATOR": new_step["step_type"] = "AGGREGATE"
+                            elif exec_mode == "auto" and a_exec_mode == "delegate": new_step["step_type"] = "MCP_PAUSE"
+                            else: new_step["step_type"] = "AI"
+                        else:
+                            new_step["step_type"] = step.get("step_type", "AI")
+                        split_steps.append(new_step)
+                for i, s in enumerate(split_steps):
+                    s["step_index"] = i
+                workflow_def["steps"] = split_steps
             except Exception as e:
                 log.error(f"[{session_id}] Planner LLM failed to generate a valid workflow: {e}")
                 error_event = {
@@ -936,26 +965,41 @@ async def _handle_resume(event: dict, queue: asyncio.Queue):
             workflow_def["id"] = session_doc["events"][0]["attributes"].get("workflow_id")
             workflow_def["title"] = session_doc.get("session_title", "Local Project")
             
-            # Force step types
+            # Force step types, then split any step the planner bundled multiple agents into
+            # (this engine executes exactly one agent per step — see _handle_start for the
+            # same fix and full rationale).
             workflow_agents = await db["agents"].find({"workflows": workflow_def["id"]}).to_list(length=None)
             settings = await db["settings"].find_one({"_id": "global_config"}) or {}
             exec_mode = settings.get("execution_mode", "auto")
-            
+
+            split_steps = []
             for step in workflow_def.get("steps", []):
-                if not step.get("agents"): continue
-                a_doc = next((a for a in workflow_agents if a["agentId"] == step["agents"][0]), None)
-                if a_doc:
-                    a_type = a_doc.get("agentType", "")
-                    a_exec_mode = a_doc.get("executionMode", "auto")
-                    
-                    if exec_mode == "force_delegate" and a_type.startswith("AI_"): a_type = "MCP_LLM_DELEGATE"
-                    elif exec_mode == "auto" and a_exec_mode == "delegate" and a_type.startswith("AI_"): a_type = "MCP_LLM_DELEGATE"
-                    elif a_doc.get("model") == "delegate" and a_type.startswith("AI_"): a_type = "MCP_LLM_DELEGATE"
-                    
-                    if a_type.startswith("MCP_"): step["step_type"] = "MCP_PAUSE"
-                    elif a_type == "AI_AGGREGATOR": step["step_type"] = "AGGREGATE"
-                    else: step["step_type"] = "AI"
-                    
+                agent_ids = step.get("agents") or []
+                if not agent_ids:
+                    continue
+                if len(agent_ids) > 1:
+                    log.warning(f"[{session_id}] Delegated planner bundled {len(agent_ids)} agents into one step ({agent_ids}) — splitting into sequential steps.")
+                for aid in agent_ids:
+                    a_doc = next((a for a in workflow_agents if a["agentId"] == aid), None)
+                    new_step = {"agents": [aid], "dependencies": step.get("dependencies", [])}
+                    if a_doc:
+                        a_type = a_doc.get("agentType", "")
+                        a_exec_mode = a_doc.get("executionMode", "auto")
+
+                        if exec_mode == "force_delegate" and a_type.startswith("AI_"): a_type = "MCP_LLM_DELEGATE"
+                        elif exec_mode == "auto" and a_exec_mode == "delegate" and a_type.startswith("AI_"): a_type = "MCP_LLM_DELEGATE"
+                        elif a_doc.get("model") == "delegate" and a_type.startswith("AI_"): a_type = "MCP_LLM_DELEGATE"
+
+                        if a_type.startswith("MCP_"): new_step["step_type"] = "MCP_PAUSE"
+                        elif a_type == "AI_AGGREGATOR": new_step["step_type"] = "AGGREGATE"
+                        else: new_step["step_type"] = "AI"
+                    else:
+                        new_step["step_type"] = step.get("step_type", "AI")
+                    split_steps.append(new_step)
+            for i, s in enumerate(split_steps):
+                s["step_index"] = i
+            workflow_def["steps"] = split_steps
+
             next_step_index = 0
             steps = workflow_def.get("steps", [])
             is_final = len(steps) == 0
@@ -1089,6 +1133,14 @@ async def _handle_process_step(event: dict, queue: asyncio.Queue):
     hitl_loop           = int(latest_event.get("attributes", {}).get("hitl_loop", "0"))
     cascade             = _extract_cascade(latest_event)
 
+    PRESERVE_INSTRUCTION = (
+        "This is a targeted revision, not a rewrite: change only what the feedback below "
+        "actually calls out. Everything else in your previous output — every field, value, "
+        "component, and structural choice not mentioned — must carry over exactly as it was. "
+        "Do not regenerate the document from scratch and do not silently drop, rename, or "
+        "restructure anything the feedback didn't ask you to touch."
+    )
+
     user_content = _compile_dependencies_context(agent_config, events)
     if validation_feedback:
         prior_block = (
@@ -1098,7 +1150,7 @@ async def _handle_process_step(event: dict, queue: asyncio.Queue):
         user_content += (
             f"{prior_block}\n\n"
             f"# VALIDATOR RESPONSE (Attempt {validation_loop})\n"
-            f"Revise your previous output to address every issue raised below:\n"
+            f"{PRESERVE_INSTRUCTION} Address every issue raised below:\n"
             f"{validation_feedback}"
         )
     if hitl_feedback:
@@ -1109,7 +1161,7 @@ async def _handle_process_step(event: dict, queue: asyncio.Queue):
         user_content += (
             f"{prior_block}\n\n"
             f"# HUMAN REVIEWER RESPONSE (Attempt {hitl_loop})\n"
-            f"Revise your previous output to address the feedback below:\n"
+            f"{PRESERVE_INSTRUCTION} Address the feedback below:\n"
             f"{hitl_feedback}"
         )
     if update_feedback:
@@ -1121,7 +1173,7 @@ async def _handle_process_step(event: dict, queue: asyncio.Queue):
         user_content += (
             f"{prior_block}\n\n"
             f"# PROJECT UPDATE REQUEST (Attempt {update_attempt})\n"
-            f"Revise your previous output to address the requested change below:\n"
+            f"{PRESERVE_INSTRUCTION} Address the requested change below:\n"
             f"{update_feedback}"
         )
 
