@@ -234,9 +234,11 @@ The correct pattern (confirmed against the enterprise product's own convention) 
 
 ---
 
-## PLANNED (not yet implemented): decompose RE_DOMAIN_MODELER_V1 and RE_API_SCHEMA_DESIGNER_V1
+## BUILT (2026-08-11): decompose RE_DOMAIN_MODELER_V1 and RE_API_SCHEMA_DESIGNER_V1
 
-**Status:** Designed 2026-08-11, cross-repo (`speakmanai_lite` + `speakmanai-cc`), not yet built. Full design with a Mermaid diagram was worked through as a published Artifact during design; this entry is the durable written record. Motivated directly by the loop-cap/regeneration-fidelity incident above ($7 of retries against `RE_API_SCHEMA_DESIGNER_V1` in one session) plus the domain-events coverage gap — both incidents hit agents that bundle multiple independent concerns into one large, input-scaling JSON output, which is exactly the shape that's hardest for an LLM to faithfully revise across HITL rounds.
+**Status:** Designed and built same day, cross-repo (`speakmanai_lite` + `speakmanai-cc`). Full design with a Mermaid diagram was worked through as a published Artifact during design; this entry is the durable written record. Motivated directly by the loop-cap/regeneration-fidelity incident above ($7 of retries against `RE_API_SCHEMA_DESIGNER_V1` in one session) plus the domain-events coverage gap — both incidents hit agents that bundle multiple independent concerns into one large, input-scaling JSON output, which is exactly the shape that's hardest for an LLM to faithfully revise across HITL rounds.
+
+**Build notes:** all 14 new agent docs (6 removed: `RE_DOMAIN_MODELER_V1`/`RE_DOMAIN_VALIDATOR_V1`/`RE_DOMAIN_HITL_V1`/`RE_API_SCHEMA_DESIGNER_V1`/`RE_API_SCHEMA_VALIDATOR_V1`/`RE_API_SCHEMA_HITL_V1`) authored and live-imported into the local DB exactly as designed below — 29 total agents in the workflow, verified zero dangling dependencies and zero stale references to the removed IDs. One gap caught during import verification (not a design gap): 5 gate/validator docs that reference the domain model as cross-check context (`RE_NAMING_HITL_V1`, `RE_FIELD_DEFINITIONS_HITL_V1`, `RE_DB_SCHEMA_HITL_V1`, `RE_DB_SCHEMA_VALIDATOR_V1`, `RE_FIELD_DEFINITIONS_VALIDATOR_V1`) were correctly renamed in the source file but initially left out of the import batches — caught by re-querying the live DB after the first two batches, fixed with a third batch. Also fixed in the same pass, same session: the Use Case Analyst's cardinality gap (see below) and the `generate-requirements`/`generate-speakmanai-code` skills in `speakmanai-cc` (plus their Desktop plugin mirrors and the rebuilt `speakmanai-sdlc.zip`) — including an adjacent stale-reference cleanup found along the way (`RE_NAMING_REVIEW_V1`/`RE_FIELD_DEFINITIONS_REVIEW_V1` still described in `generate-requirements`'s AWAITING_INPUT handling section, left over from the HITL-gate upgrade earlier this session and never updated; corrected to describe the actual `{status, feedback}` HITL_VALIDATOR response shape). Pure workflow JSON + skill-doc changes — no engine code involved, no exe rebuild needed for this piece.
 
 **Precedent already proven in this workflow:** `RE_FIELD_DEFINITIONS_CATALOG_V1` exists as its own agent specifically because field constraints were pulled out of domain modeling earlier. This plan applies the same principle to the two remaining "kitchen sink" agents.
 
@@ -273,3 +275,17 @@ Swept every skill in `speakmanai-cc` for references to `RE_DOMAIN_MODELER_V1` / 
 **Cost tradeoff:** 8 new agent docs replace 2 (6 real content/validator/HITL agents + 2 cheap fast-tier synthesis aggregators) — more calls in the happy path, but each is cheaper and the bet is fewer retries per gate now that each gate reviews one concern instead of a 40-50K character multi-concern document.
 
 **Porting notes:** Not evaluated yet — depends on whether the enterprise version has the same monolithic-agent shape for its domain modeling / API schema equivalents.
+
+---
+
+## FIXED (2026-08-11): Use Case Analyst produces one UC per requirement instead of every UC a requirement implies
+
+**Status:** Found and fixed same day, on an in-progress real build the user was running. Same failure family as the scenario-coverage gap above (a "cover the floor, not the ceiling" instruction pattern), but one level up — this is about how many *use cases* a requirement produces, not how many *scenarios* within one use case.
+
+**What:** `RE_USE_CASE_ANALYST_V1`'s original instruction was literally "for every REQ-F-xxx functional requirement, produce **a** UC-XX use case" — a 1:1 mapping by construction. Real symptom the user hit repeatedly on a real project: a screen got built in the UX Design phase with no use case that ever led to it (an after-the-fact design fix); "no showing items on page load, just a search" (the list/browse-with-no-query use case was never generated, only search was). The user's own diagnosis, confirmed correct: the model likely considers the fuller set of plausible use cases during generation and collapses to a single representative one rather than being told not to.
+
+**Fix applied:** `RE_USE_CASE_ANALYST_V1` rewritten to require enumerating every use case a requirement implies, with an explicit checklist to work through per requirement (access patterns — browse vs. search vs. filter vs. sort vs. navigate-in; CRUD completeness; screen-level states — empty vs. populated, first-time vs. returning; actor variations — differing scope/permissions) and an explicit "do not silently prune to the most representative one" instruction. `RE_USE_CASE_VALIDATOR_V1` gained a new check (independently re-deriving the expected use case set per requirement and flagging under-enumeration by name) inserted between the existing coverage and scenario-category checks.
+
+**Touches:** `WorkflowsAndAgents/MCP_REQUIREMENTS_ENGINEERING_V1.json` — `RE_USE_CASE_ANALYST_V1` and `RE_USE_CASE_VALIDATOR_V1` systemPrompts only. No engine changes, live-imported into the DB.
+
+**Porting notes:** Prompt-only fix, same portability profile as the other Use Case Analyst gap.
