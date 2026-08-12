@@ -231,3 +231,45 @@ The correct pattern (confirmed against the enterprise product's own convention) 
 **Touches (once fixed):** `orchestration/mcp-server/engine.py` (`_handle_hitl_response` for the loop-cap fix; `_handle_process_step`'s injection block for the fidelity mitigation).
 
 **Porting notes:** The loop-cap silent-discard behavior should be checked against the enterprise version's equivalent HITL mechanism if one exists — not yet confirmed either way.
+
+---
+
+## PLANNED (not yet implemented): decompose RE_DOMAIN_MODELER_V1 and RE_API_SCHEMA_DESIGNER_V1
+
+**Status:** Designed 2026-08-11, cross-repo (`speakmanai_lite` + `speakmanai-cc`), not yet built. Full design with a Mermaid diagram was worked through as a published Artifact during design; this entry is the durable written record. Motivated directly by the loop-cap/regeneration-fidelity incident above ($7 of retries against `RE_API_SCHEMA_DESIGNER_V1` in one session) plus the domain-events coverage gap — both incidents hit agents that bundle multiple independent concerns into one large, input-scaling JSON output, which is exactly the shape that's hardest for an LLM to faithfully revise across HITL rounds.
+
+**Precedent already proven in this workflow:** `RE_FIELD_DEFINITIONS_CATALOG_V1` exists as its own agent specifically because field constraints were pulled out of domain modeling earlier. This plan applies the same principle to the two remaining "kitchen sink" agents.
+
+### The split
+
+**`RE_DOMAIN_MODELER_V1` → three agents:**
+- `RE_DOMAIN_STRUCTURE_V1` — aggregates, entities, value objects, repository interfaces, DDD layer assignment. Same inputs as today (`RE_CONTEXT_INTAKE_V1`, `RE_USE_CASE_ANALYST_V1`). Own `AI_VALIDATOR` + `HITL_VALIDATOR` gate.
+- `RE_DOMAIN_EVENTS_V1` — `domain_events` only, reconciled against every use case scenario *and* the settled structure from the step above (depends on `RE_USE_CASE_ANALYST_V1` + `RE_DOMAIN_STRUCTURE_V1`). This is exactly the concern that had the coverage bug — now isolated so a fix to it can never regress the aggregate list. Own `AI_VALIDATOR` + `HITL_VALIDATOR` gate.
+- `RE_DOMAIN_MODEL_SYNTHESIS_V1` — new `AI_AGGREGATOR`, `fast` tier, depends on both of the above. Its only job: output the JSON union of Structure + Events, reproducing the exact combined shape `RE_DOMAIN_MODELER_V1` used to emit directly (`{aggregates, domain_events, ddd_layer_assignment, inferred_items}`). No validator/HITL gate of its own — trivial deterministic-ish merge task, the two inputs are already human-approved.
+
+**`RE_API_SCHEMA_DESIGNER_V1` → three agents:**
+- `RE_API_TYPES_DESIGNER_V1` — component schemas (the nouns), applying field constraints from `RE_FIELD_DEFINITIONS_CATALOG_V1` per type. Own `AI_VALIDATOR` + `HITL_VALIDATOR` gate.
+- `RE_API_ENDPOINTS_DESIGNER_V1` — paths: HTTP methods, security, pagination, rate limiting, cross-use-case data-continuity checks. Depends on `RE_API_TYPES_DESIGNER_V1` (references the now-settled types rather than defining them inline) + `RE_USE_CASE_ANALYST_V1` + `RE_CONTEXT_INTAKE_V1`. Own `AI_VALIDATOR` + `HITL_VALIDATOR` gate. This was the actual pair that regressed in production.
+- `RE_API_SCHEMA_SYNTHESIS_V1` — new `AI_AGGREGATOR`, `fast` tier, depends on both of the above. Merges `components` (Types) with `paths` (Endpoints) into one valid OpenAPI document (`{openapi, info, paths, components}`), reproducing what `RE_API_SCHEMA_DESIGNER_V1` used to emit directly.
+
+**Downstream engine rewiring (small):** `RE_FIELD_DEFINITIONS_CATALOG_V1`, `RE_NAMING_CONVENTION_ARCHITECT_V1`, `RE_DATABASE_SCHEMA_DESIGNER_V1`, `RE_TEST_STRATEGIST_V1` all currently depend on `RE_DOMAIN_MODELER_V1` — they repoint to `RE_DOMAIN_MODEL_SYNTHESIS_V1` instead. One agent-ID swap each, not two new dependency edges — the synthesis agents deliberately preserve the pre-split dependency shape for everything downstream of them.
+
+### Why the synthesis-agent design over the cheaper-looking alternative
+
+Considered and rejected: skip the synthesis agents, have the two consuming *skills* (below) fetch both halves and merge the JSON themselves. Rejected because that duplicates the exact same merge logic in two separate skill files (three counting the Desktop plugin mirror) that would then have to stay hand-synchronized forever as either split agent's output shape evolves. Two cheap `fast`-tier aggregator calls is a better trade than a permanent maintenance/drift liability in code outside this repo.
+
+### Downstream SDLC impact (the reason this is cross-repo)
+
+Swept every skill in `speakmanai-cc` for references to `RE_DOMAIN_MODELER_V1` / `RE_API_SCHEMA_DESIGNER_V1`. `promote-environment` and the JS/Go/Python coding-language variants: unaffected, no references. Two skills are affected, each duplicated in two places (live `.claude/skills/` copy + the manually-synced `desktop-skills/org-plugins/speakmanai-sdlc/` Desktop plugin mirror — not auto-mirrored):
+
+- **`generate-requirements`** (`Step 4 — Download and Save Contracts`) — its agent-ID→filename table maps `RE_DOMAIN_MODELER_V1` → `domain_model.txt` and `RE_API_SCHEMA_DESIGNER_V1` → `api_schema.txt`. Needs exactly a one-line agent-ID swap per row (→ `RE_DOMAIN_MODEL_SYNTHESIS_V1` / `RE_API_SCHEMA_SYNTHESIS_V1`) — no new merge logic, since the synthesis agents already reproduce the same combined file shape.
+- **`generate-speakmanai-code`** (Phase 3) — has its *own separate copy* of the same mapping (`Step`s under "Branch A — Local files on disk" / "Branch B — Fetch from SPEAKMAN.AI"). Branch B calls `get_output(session_id, agent_id)` **directly against a live MCP session**, bypassing the saved file — this path would break outright post-split (the old agent IDs stop existing) if not updated. Same one-line-per-row fix as above.
+- **`generate-infrastructure`, `generate-uat-tests`, `generate-ux-design`** — read only the saved files (`domain_model.txt`, `api_schema.txt`), never the agent IDs directly. Zero changes needed, as long as the synthesis agents keep the file contract byte-shape-compatible (which is the whole point of the synthesis-agent design).
+
+**Touches once built:**
+- `speakmanai_lite`: `WorkflowsAndAgents/MCP_REQUIREMENTS_ENGINEERING_V1.json` (2 agents removed, 8 added, 4 downstream agents' `dependencies` updated). No engine code changes — this is pure workflow authoring, reusing existing `AI_WORKFLOW`/`AI_AGGREGATOR`/`AI_VALIDATOR`/`HITL_VALIDATOR` machinery.
+- `speakmanai-cc`: `.claude/skills/generate-requirements/SKILL.md`, `.claude/skills/generate-speakmanai-code/SKILL.md`, and their two mirrors under `desktop-skills/org-plugins/speakmanai-sdlc/skills/` — one-line agent-ID rename each, 4 files total.
+
+**Cost tradeoff:** 8 new agent docs replace 2 (6 real content/validator/HITL agents + 2 cheap fast-tier synthesis aggregators) — more calls in the happy path, but each is cheaper and the bet is fewer retries per gate now that each gate reviews one concern instead of a 40-50K character multi-concern document.
+
+**Porting notes:** Not evaluated yet — depends on whether the enterprise version has the same monolithic-agent shape for its domain modeling / API schema equivalents.
