@@ -20,6 +20,12 @@ build/
 dist/
 *.spec.bak
 
+# Code-signing tooling (downloaded binaries, ~40MB - not repo source).
+# sign-exe.ps1 and metadata.json ARE tracked; only the extracted tool dirs are ignored.
+.codesign/extracted/
+.codesign/sdk-extracted/
+.codesign/*.nupkg
+
 # SPEAKMAN.AI runtime data
 ~/.speakmanai/
 *.db
