@@ -1,5 +1,27 @@
 # Release Notes
 
+## v1.3.0
+
+**Release:** https://github.com/speakmancip/speakmanai-local/releases/tag/v1.3.0
+
+### Headline features
+
+**1. `render_document` — server-side document rendering, no local Python or Node required**
+A new MCP tool converts a Markdown document into a fully self-contained, branded HTML document entirely on the server side — no local script, no Node/puppeteer dependency, nothing the calling client needs installed. This is what unblocks running `generate-sad` and `generate-compliance-report` from any MCP client, including ones that can't shell out to a local interpreter at all.
+
+**2. Confirmed working: Microsoft Copilot Studio**
+`generate-sad` has been run end-to-end inside a live Copilot Studio agent, connected to a local SPEAKMAN.AI server over a tunneled connection. SPEAKMAN.AI's MCP surface was already client-agnostic in principle; this is the first outside-Anthropic client it's been verified against.
+
+### Under the hood
+- PDF generation and the local template-directory system (`templates/default/`, `templates/corporate/`) are both retired — HTML is the deliverable now, print-to-PDF-able from any browser, with no per-user template setup required.
+- The default document branding is a plain text wordmark rather than an embedded logo image — a full rendered document now runs about 1,400 tokens, down from what an unoptimized embedded logo would have cost (~57,000 tokens for the same document).
+- Fixed a long-standing bug where a workflow step listing more than one agent in its `agents` array silently ran only the first one — the planner had always been free to bundle multiple agents into a single step, but the engine only ever executed one. Steps are now split and executed individually regardless of how the planner grouped them.
+- Fixed a bug where reaching the HITL review-loop cap discarded the human's final round of feedback and advanced using stale, pre-feedback content instead of the freshly regenerated output.
+- `RE_USE_CASE_ANALYST_V1` previously produced exactly one use case per functional requirement by construction; it now enumerates every use case a requirement actually implies (access patterns, CRUD completeness, screen-level states, actor variations), roughly 5x the catalog density on a real test project.
+- `RE_DOMAIN_MODELER_V1` and `RE_API_SCHEMA_DESIGNER_V1`, previously single large agents, are each decomposed into focused sub-agents plus a mechanical synthesis step — reducing single-call cognitive load and the blast radius of any one regeneration.
+
+---
+
 ## v1.2.1
 
 **Release:** https://github.com/speakmancip/speakmanai-local/releases/tag/v1.2.1
