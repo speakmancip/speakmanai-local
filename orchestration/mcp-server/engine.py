@@ -1391,3 +1391,9 @@ async def generate_document_local(session_id: str, format_hint: str) -> str:
     return json.dumps({"session_id": session_id, "format": format_hint, "document": document_text}, indent=2)
 
 
+async def render_document_local(markdown_text: str, title: str = None, subtitle: str = None) -> str:
+    import document_renderer
+    html = document_renderer.render_markdown_to_html(markdown_text, title, subtitle)
+    return json.dumps({"html": html, "title": title, "subtitle": subtitle})
+
+

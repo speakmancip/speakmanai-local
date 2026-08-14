@@ -21,6 +21,7 @@ a = Analysis(
         ("orchestration/mcp-server/engine.py",  "orchestration/mcp-server"),
         ("orchestration/mcp-server/database.py","orchestration/mcp-server"),
         ("orchestration/mcp-server/database_sqlite.py", "orchestration/mcp-server"),
+        ("orchestration/mcp-server/document_renderer.py", "orchestration/mcp-server"),
     ],
     hiddenimports=[
         # FastAPI / Starlette
