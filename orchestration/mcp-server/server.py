@@ -36,6 +36,7 @@ from engine import (
     list_projects_local,
     get_project_local,
     generate_document_local,
+    render_document_local,
     resolve_agent_step_index,
     transition_completed_or_cancelled_to_draft,
 )
@@ -1224,6 +1225,32 @@ async def generate_document(session_id: str, format: str = "document") -> str:
         return await generate_document_local(session_id, format)
     except Exception as e:
         raise RuntimeError(f"generate_document failed: {str(e)}")
+
+
+# ─────────────────────────────────────────────
+# Tool 14: render_document
+# ─────────────────────────────────────────────
+@mcp.tool(name="render_document", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
+async def render_document(markdown: str, title: str = "", subtitle: str = "") -> str:
+    """
+    Convert a Markdown document into a fully self-contained, SPEAKMAN.AI-branded HTML document
+    (inline CSS, base64 logo — no external files, no local Python/Node required).
+
+    To rebrand: edit the returned HTML directly (swap the logo <img> src and the header/accent
+    CSS custom properties) — there is no template file system.
+
+    Args:
+        markdown: The document body as Markdown (already synthesized by the caller).
+        title:    Document title (default: first H1 in markdown).
+        subtitle: Document subtitle (default: "Generated {today}").
+
+    Returns:
+        JSON: {"html": "<full HTML document string>"}
+    """
+    try:
+        return await render_document_local(markdown, title or None, subtitle or None)
+    except Exception as e:
+        raise RuntimeError(f"render_document failed: {str(e)}")
 
 
 # ─────────────────────────────────────────────
