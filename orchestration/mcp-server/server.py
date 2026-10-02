@@ -1685,10 +1685,10 @@ def _build_setup_html(cfg: dict) -> str:
 
 <script>
 const MODELS = {{
-  gemini:    {{ fast: ['gemini-2.5-flash-lite','gemini-2.5-flash','gemini-3.1-flash-lite'], standard: ['gemini-2.5-flash','gemini-2.5-flash-lite','gemini-3-flash-preview'], advanced: ['gemini-2.5-pro','gemini-2.5-flash','gemini-3.1-pro-preview'] }},
+  gemini:    {{ fast: ['gemini-2.5-flash-lite','gemini-2.5-flash','gemini-3.1-flash-lite','gemini-3.8-flash'], standard: ['gemini-2.5-flash','gemini-2.5-flash-lite','gemini-3-flash-preview','gemini-3.8-flash'], advanced: ['gemini-2.5-pro','gemini-2.5-flash','gemini-3.1-pro-preview','gemini-3.8-flash'] }},
   anthropic: {{ fast: ['claude-haiku-4-5-20251001','claude-sonnet-4-6'], standard: ['claude-sonnet-4-6','claude-haiku-4-5-20251001','claude-sonnet-5'], advanced: ['claude-opus-4-8','claude-sonnet-4-6','claude-sonnet-5','claude-fable-5'] }},
   openai:    {{ fast: ['gpt-4o-mini','gpt-4o'], standard: ['gpt-4o','gpt-4o-mini'], advanced: ['gpt-4o','gpt-4o-mini'] }},
-  vertexai:  {{ fast: ['gemini-2.5-flash-lite','gemini-2.5-flash','gemini-3.1-flash-lite'], standard: ['gemini-2.5-flash','gemini-2.5-flash-lite','gemini-3-flash-preview'], advanced: ['gemini-2.5-pro','gemini-2.5-flash','gemini-3.1-pro-preview'] }},
+  vertexai:  {{ fast: ['gemini-2.5-flash-lite','gemini-2.5-flash','gemini-3.1-flash-lite','gemini-3.8-flash'], standard: ['gemini-2.5-flash','gemini-2.5-flash-lite','gemini-3-flash-preview','gemini-3.8-flash'], advanced: ['gemini-2.5-pro','gemini-2.5-flash','gemini-3.1-pro-preview','gemini-3.8-flash'] }},
   ollama:    {{ fast: [], standard: [], advanced: [] }},
 }};
 
