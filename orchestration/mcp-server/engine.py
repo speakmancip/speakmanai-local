@@ -35,7 +35,7 @@ def _cfg():
     """Return current provider config from environment (live — no restart needed)."""
     return {
         "provider":        os.environ.get("LLM_PROVIDER", "gemini").lower(),
-        "default_model":   os.environ.get("DEFAULT_MODEL", "gemini-2.5-flash-lite"),
+        "default_model":   os.environ.get("DEFAULT_MODEL", "gemini-3.5-flash-lite"),
         "standard_model":  os.environ.get("STANDARD_MODEL", ""),
         "advanced_model":  os.environ.get("ADVANCED_MODEL", ""),
         "ollama_url":      os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
@@ -50,7 +50,7 @@ def _cfg():
 # Keep module-level aliases for any code that references them directly (backwards compat)
 # These reflect startup values only — use _cfg() inside functions for live values.
 LLM_PROVIDER        = os.environ.get("LLM_PROVIDER", "gemini").lower()
-DEFAULT_MODEL       = os.environ.get("DEFAULT_MODEL", "gemini-2.5-flash-lite")
+DEFAULT_MODEL       = os.environ.get("DEFAULT_MODEL", "gemini-3.5-flash-lite")
 STANDARD_MODEL      = os.environ.get("STANDARD_MODEL", "")
 ADVANCED_MODEL      = os.environ.get("ADVANCED_MODEL", "")
 OLLAMA_BASE_URL     = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
@@ -58,8 +58,8 @@ OLLAMA_FALLBACK_MODEL = os.environ.get("OLLAMA_FALLBACK_MODEL", "llama3")
 
 # ── Abstract model tier → provider model mapping ──────────────────────────
 MODEL_TIERS = {
-    "gemini":    {"fast": "gemini-2.5-flash-lite", "standard": "gemini-2.5-flash", "advanced": "gemini-2.5-pro"},
-    "vertexai":  {"fast": "gemini-2.5-flash-lite", "standard": "gemini-2.5-flash", "advanced": "gemini-2.5-pro"},
+    "gemini":    {"fast": "gemini-3.5-flash-lite", "standard": "gemini-3.8-flash", "advanced": "gemini-3.1-pro-preview"},
+    "vertexai":  {"fast": "gemini-3.5-flash-lite", "standard": "gemini-3.8-flash", "advanced": "gemini-3.1-pro-preview"},
     "anthropic": {"fast": "claude-haiku-4-5-20251001", "standard": "claude-sonnet-4-6", "advanced": "claude-opus-4-8"},
     "openai":    {"fast": "gpt-4o-mini",       "standard": "gpt-4o",           "advanced": "gpt-4o"},
     "ollama":    {"fast": None,                 "standard": None,               "advanced": None},
@@ -67,11 +67,9 @@ MODEL_TIERS = {
 
 # Reverse map: known model name → tier (used for cross-provider conflict resolution)
 _MODEL_TO_TIER = {
-    "gemini-2.5-pro": "advanced",   "gemini-2.5-flash": "standard",
-    "gemini-2.5-flash-lite": "fast",
-    "gemini-2.0-pro": "advanced",   "gemini-2.0-flash": "fast",
-    "gemini-3.1-pro-preview": "advanced", "gemini-3-flash-preview": "standard",
-    "gemini-3.1-flash-lite": "fast", "gemini-3.8-flash": "standard",
+    "gemini-3.1-pro-preview": "advanced", "gemini-3.8-flash": "standard",
+    "gemini-3-flash-preview": "standard",
+    "gemini-3.5-flash-lite": "fast", "gemini-3.1-flash-lite": "fast",
     "claude-opus-4-8": "advanced",  "claude-sonnet-4-6": "standard",
     "claude-haiku-4-5-20251001": "fast", "claude-haiku-4-5": "fast",
     "claude-sonnet-5": "standard",  "claude-fable-5": "advanced",

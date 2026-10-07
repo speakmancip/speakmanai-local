@@ -27,9 +27,9 @@ RAW_EVENTS_DB_NAME=speakmanai_db
 
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=AIza...
-DEFAULT_MODEL=gemini-2.5-flash-lite
-STANDARD_MODEL=gemini-2.5-flash
-ADVANCED_MODEL=gemini-2.5-pro
+DEFAULT_MODEL=gemini-3.5-flash-lite
+STANDARD_MODEL=gemini-3.8-flash
+ADVANCED_MODEL=gemini-3.1-pro-preview
 ```
 
 **Claude**
@@ -81,9 +81,9 @@ RAW_EVENTS_DB_NAME=speakmanai_db
 LLM_PROVIDER=vertexai
 GCP_PROJECT_ID=my-gcp-project
 GCP_REGION=us-east1
-DEFAULT_MODEL=gemini-2.5-flash-lite
-STANDARD_MODEL=gemini-2.5-flash
-ADVANCED_MODEL=gemini-2.5-pro
+DEFAULT_MODEL=gemini-3.5-flash-lite
+STANDARD_MODEL=gemini-3.8-flash
+ADVANCED_MODEL=gemini-3.1-pro-preview
 ```
 
 ### 2. Start everything
@@ -136,9 +136,9 @@ USE_SQLITE=true
 
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=AIza...
-DEFAULT_MODEL=gemini-2.5-flash-lite
-STANDARD_MODEL=gemini-2.5-flash
-ADVANCED_MODEL=gemini-2.5-pro
+DEFAULT_MODEL=gemini-3.5-flash-lite
+STANDARD_MODEL=gemini-3.8-flash
+ADVANCED_MODEL=gemini-3.1-pro-preview
 ```
 
 ### 2. Start
@@ -168,9 +168,9 @@ pip install -r requirements.txt
 USE_SQLITE=true
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=AIza...
-DEFAULT_MODEL=gemini-2.5-flash-lite
-STANDARD_MODEL=gemini-2.5-flash
-ADVANCED_MODEL=gemini-2.5-pro
+DEFAULT_MODEL=gemini-3.5-flash-lite
+STANDARD_MODEL=gemini-3.8-flash
+ADVANCED_MODEL=gemini-3.1-pro-preview
 ```
 
 Same provider options as the Docker section apply.
@@ -237,11 +237,11 @@ Use it to:
 
 | Provider | `LLM_PROVIDER` | Key variable | Fast (`DEFAULT_MODEL`) | Standard (`STANDARD_MODEL`) | Advanced (`ADVANCED_MODEL`) |
 |---|---|---|---|---|---|
-| Gemini | `gemini` | `GEMINI_API_KEY` | `gemini-2.5-flash-lite` | `gemini-2.5-flash` | `gemini-2.5-pro` |
+| Gemini | `gemini` | `GEMINI_API_KEY` | `gemini-3.5-flash-lite` | `gemini-3.8-flash` | `gemini-3.1-pro-preview` |
 | Claude | `anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` | `claude-sonnet-4-6` | `claude-opus-4-8` |
 | OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-4o-mini` | `gpt-4o` | `gpt-4o` |
 | Ollama | `ollama` | *(none)* | set via `DEFAULT_MODEL` | set via `STANDARD_MODEL` | set via `ADVANCED_MODEL` |
-| Vertex AI | `vertexai` | `GCP_PROJECT_ID` + `GCP_REGION` | `gemini-2.5-flash-lite` | `gemini-2.5-flash` | `gemini-2.5-pro` |
+| Vertex AI | `vertexai` | `GCP_PROJECT_ID` + `GCP_REGION` | `gemini-3.5-flash-lite` | `gemini-3.8-flash` | `gemini-3.1-pro-preview` |
 
 ### Model tiers
 

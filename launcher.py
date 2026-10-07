@@ -34,6 +34,27 @@ log = logging.getLogger(__name__)
 CONFIG_PATH = Path.home() / ".speakmanai" / "config.json"
 PORT = int(os.environ.get("SPEAKMANAI_PORT", "8000"))
 
+# Gemini 2.x models were retired in October 2026. Saved configs that still
+# reference them are remapped to the current default for the same tier.
+_RETIRED_MODEL_PREFIX = "gemini-2"
+_TIER_REPLACEMENTS = {
+    "default_model":  "gemini-3.5-flash-lite",
+    "standard_model": "gemini-3.8-flash",
+    "advanced_model": "gemini-3.1-pro-preview",
+}
+
+
+def _migrate_retired_models(cfg: dict) -> bool:
+    """Replace retired model names in cfg in place. Returns True if anything changed."""
+    changed = False
+    for key, replacement in _TIER_REPLACEMENTS.items():
+        old = cfg.get(key)
+        if isinstance(old, str) and old.startswith(_RETIRED_MODEL_PREFIX):
+            cfg[key] = replacement
+            log.info(f"Migrated retired model {key}: {old} -> {replacement}")
+            changed = True
+    return changed
+
 
 def load_config_to_env() -> None:
     """Read ~/.speakmanai/config.json and inject values into the process environment."""
@@ -41,6 +62,8 @@ def load_config_to_env() -> None:
     if CONFIG_PATH.exists():
         try:
             cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            if _migrate_retired_models(cfg):
+                CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
             mapping = {
                 "llm_provider":      "LLM_PROVIDER",
                 "gemini_api_key":    "GEMINI_API_KEY",

@@ -15,7 +15,7 @@ services:
       - RAW_EVENTS_DB_NAME=${RAW_EVENTS_DB_NAME:-speakmanai_db}
       # LLM Provider — set LLM_PROVIDER to: gemini | anthropic | openai | ollama
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
-      - DEFAULT_MODEL=${DEFAULT_MODEL:-gemini-2.5-flash-lite}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-gemini-3.5-flash-lite}
       - ADVANCED_MODEL=${ADVANCED_MODEL:-}
       # Provider API keys (leave blank for providers you are not using)
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
