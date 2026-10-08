@@ -439,6 +439,18 @@ def _latest_output_for_agent(agent_id: str, events: list) -> str:
     return latest
 
 
+def _latest_update_request(events: list) -> tuple[str, str]:
+    """(origin agent_id, requested change) of the update_session cascade in flight — read off the
+    most recent update_retry event that _handle_update_session wrote. Downstream cascade steps
+    need the ORIGIN of the update, not merely whichever step happened to run just before them."""
+    for event in reversed(events):
+        if event.get("attributes", {}).get("update_retry") == "true":
+            exec_ctx = event.get("data", {}).get("execution_context", {})
+            return (exec_ctx.get("source_outputs", {}).get("source_agent_id", ""),
+                    exec_ctx.get("update_feedback", ""))
+    return "", ""
+
+
 async def _resolve_downstream_agents(workflow_id: str, agent_id: str, db) -> set:
     """Fixed-point walk of the dependencies graph declared on each agent's DB doc — everything
     transitively depending on agent_id, direct or indirect. Wildcard ("*") dependents
@@ -536,10 +548,20 @@ async def _emit_advance_event(session_id: str, db, queue: asyncio.Queue, workflo
             fresh_doc = await db["events_raw"].find_one({"session_id": session_id})
             fresh_events = fresh_doc.get("events", []) if fresh_doc else []
             exec_ctx["previous_output"] = _latest_output_for_agent(next_agent_id, fresh_events)
+            origin_agent_id, update_request = _latest_update_request(fresh_events)
+            origin_agent_id = origin_agent_id or agent_id
+            exec_ctx["update_origin_agent_id"] = origin_agent_id
             exec_ctx["update_feedback"] = (
-                f"Upstream agent '{agent_id}' was just revised as part of a project update. "
-                "Re-check your own output against its new content and adjust anything that's "
-                "no longer consistent with it — otherwise leave your output unchanged."
+                f"Upstream agent '{origin_agent_id}' was revised as part of a project update, "
+                "in response to the change request below. That request (including any "
+                "'change nothing else' wording) was addressed to that agent, not to you.\n"
+                f"--- change request to {origin_agent_id} ---\n{update_request or '(not recorded)'}\n"
+                "--- end change request ---\n\n"
+                "Your previous output was written against the OLD upstream content. The CONTEXT "
+                "sections above already contain the REVISED content. Compare them against your "
+                "previous output and update every finding, score, gap, risk, control, or statement "
+                "that the revision changes, resolves, or newly introduces within your remit. "
+                "Leave anything the revision does not affect unchanged."
             )
 
     new_event = {
@@ -1168,10 +1190,20 @@ async def _handle_process_step(event: dict, queue: asyncio.Queue):
             f"\n\n# YOUR PREVIOUS OUTPUT (Attempt {update_attempt})\n{previous_output}"
             if previous_output else ""
         )
+        # A downstream cascade step isn't the target of the change request itself — its job is
+        # to absorb the revised upstream context. PRESERVE_INSTRUCTION's "change only what the
+        # feedback calls out" reads as "change nothing" there, so it gets its own framing.
+        is_downstream = bool(exec_ctx.get("update_origin_agent_id"))
+        instruction = (
+            "This is a revision driven by changed upstream inputs, not a rewrite: keep your "
+            "structure and everything the upstream change does not affect, but your output must "
+            "reflect the revised upstream content."
+            if is_downstream else f"{PRESERVE_INSTRUCTION} Address the requested change below:"
+        )
         user_content += (
             f"{prior_block}\n\n"
             f"# PROJECT UPDATE REQUEST (Attempt {update_attempt})\n"
-            f"{PRESERVE_INSTRUCTION} Address the requested change below:\n"
+            f"{instruction}\n"
             f"{update_feedback}"
         )
 
