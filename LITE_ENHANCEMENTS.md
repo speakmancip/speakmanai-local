@@ -308,3 +308,38 @@ Swept every skill in `speakmanai-cc` for references to `RE_DOMAIN_MODELER_V1` / 
 - `speakmancip/speakmanai-cc` — `generate-sad`/`generate-compliance-report` `SKILL.md` (3 locations each: `.claude/skills/`, `desktop-skills/`, `desktop-skills/org-plugins/speakmanai-sdlc/skills/`) updated to call `render_document` instead of local scripts; retired `scripts/doc_writer.py`, `scripts/preprocess.py`, `templates/` deleted from both skills and their org-plugin mirrors.
 
 **Porting notes:** Verified `render_document_local` end-to-end against the live source (ToC correct, tables rendered), verified `document_renderer.py`/`server.py`/`engine.py` are present with correct content in the rebuilt `SpeakmanAI.exe` via `PyInstaller.archive.readers.CArchiveReader`, and confirmed the rebuilt exe starts and serves `/health`. **Confirmed live end-to-end in Microsoft Copilot Studio** (2026-08-12) — `generate-sad` run to completion through a real Copilot Studio agent, tunneled via VS Code port forwarding to the local server; see `speakmancip/speakmanai-cc`'s `desktop-skills/COPILOT_STUDIO.md` for the deployment specifics (connector setup, tunnel requirements, upload mechanics). Exe rebuilt a final time after the wordmark change and re-verified via `CArchiveReader` — bundled `document_renderer.py` confirmed to contain no `base64,` reference at all (16.5KB module, down from 221KB with the original logo).
+
+## CHANGED (2026-10-07): Gemini 2.x retired, 3.x tier defaults, startup config migration
+
+**Why:** Google is shutting down the Gemini 2.x models in October 2026. Any install still pointed at a 2.x model would start failing every LLM call.
+
+**New Gemini/Vertex defaults:** fast `gemini-3.5-flash-lite`, standard `gemini-3.8-flash`, advanced `gemini-3.1-pro-preview`. `gemini-3.8-flash` is also offered in the fast and advanced dropdowns, since early testing suggested it can hold its own against 3.1 Pro for SAD work at lower cost.
+
+**Touches:**
+- `engine.py`: `MODEL_TIERS`, `_MODEL_TO_TIER` (2.0/2.5 entries removed, `gemini-3.5-flash-lite` and `gemini-3.8-flash` added), and the `DEFAULT_MODEL` fallbacks. The existing `startswith("gemini-3")` temperature skip already covers the new models.
+- `server.py`: `_PROVIDER_MODELS` defaults and the setup page's `MODELS` dropdown lists (3.x only for `gemini` and `vertexai`).
+- `launcher.py`: new `_migrate_retired_models()`. On startup, any `default_model`/`standard_model`/`advanced_model` in `~/.speakmanai/config.json` starting with `gemini-2` is replaced by the new default for that tier and the file is rewritten. Idempotent; a second run changes nothing.
+- `.env.template`, `docker-compose.yml`, `README.md`, `SETUP.md`: defaults updated. Docker/source users' own `.env` files are not migrated.
+
+**Not changed:** workflow JSON files only reference tier names (`fast`/`standard`/`advanced`), never model IDs, so no workflow needed editing.
+
+## FIXED (2026-10-07): `update_session` cascade left downstream agents unchanged
+
+**Symptom:** On a Tip App `MCP_SOLUTION_ARCHITECTURE_V1` session, an update to `MCP_TECHNICAL_SOLUTION_ARCHITECT_V1` (signed QR payloads, CCPA deletion module) cascaded to `MCP_COMPLIANCE_OFFICER_V2`, which returned output byte-identical to its pre-update version.
+
+**Diagnosis (from the session's event log, not assumed):** the dependency context was correct. The compliance agent's `CONTEXT FROM MCP_TECHNICAL_SOLUTION_ARCHITECT_V1` held the latest revised content, and ordering was fine. The "always fetch latest" read path is not the problem; don't re-investigate it. The cause was the cascade note `_emit_advance_event` seeded:
+- It named `agent_id`, the step that had just run (Visualization), not the agent the update started from. Compliance doesn't depend on Visualization, and Visualization's output hadn't changed.
+- It never included the change request.
+- It ended "otherwise leave your output unchanged", and `_handle_process_step` prefixed `PRESERVE_INSTRUCTION` ("change only what the feedback actually calls out").
+
+**Fix:** new `_latest_update_request(events)` reads the origin agent and request off the most recent `update_retry` event. The seeded note names that origin and includes the request, explicitly scoped ("that request, including any 'change nothing else' wording, was addressed to that agent, not to you"), then tells the agent its previous output was written against the old content. The seed also sets `update_origin_agent_id`, and `_handle_process_step` uses it to swap `PRESERVE_INSTRUCTION` for a downstream-specific instruction. The directly targeted agent keeps `PRESERVE_INSTRUCTION`. The delegate re-prompt in `server.py` needed no change.
+
+**Verified:** live re-run by the user on 2026-10-08; the downstream output changed. Commit `07d373f`. The hosted platform has the identical bug in `cascade_helpers.py`; a port is written up in `speakman_generic/LITE_PARITY_HANDOFF.md`.
+
+## PORTED (2026-10-08): three fixes back from the hosted platform (`speakman_generic`)
+
+- **`document_renderer.py` f-string backslash** (enterprise `59a7e03`): `re.sub(r"^\d+\.\s", ...)` inside an f-string's `{...}` is a SyntaxError before Python 3.12. The Docker image is `python:3.11-slim`, so `render_document` failed there; the exe's 3.12 masked it. The import is lazy, so the container still started. Compile checks for this class of bug need a pre-3.12 interpreter (`py -3.8 -m py_compile` works locally).
+- **`submit_response` status race** (enterprise `916870f`, strengthened here): the old code queued the resume and then wrote `IN_PROGRESS` unconditionally. Enterprise made that trailing write conditional on `AWAITING_INPUT`, but that still loses when the resume reaches the next delegate pause first (status is `AWAITING_INPUT` again, so the write matches and poll_workflow sticks on `IN_PROGRESS`). Lite now claims the pause atomically (`update_one_if`, AWAITING_INPUT → IN_PROGRESS) before queueing, and rejects the submit if the claim fails. Safe because neither `_handle_resume` nor `_handle_hitl_response` checks status on arrival, and every MCP_PAUSE event carries `status: AWAITING_INPUT` (all 165 in the local DB checked).
+- **HITL prior-feedback lookup scoped to its own step** (enterprise `0957ce8`): `_get_mcp_pause_config`'s `hitl_loop > 0` scan now also matches `current_step_index`. Hardening only: lite runs a session sequentially, and no path was found where another agent's `hitl_retry` could be the most recent one.
+
+**Not ported, and why:** Pub/Sub idempotency and out-of-order status guards (lite uses an in-process queue), the validator-resolution retry loop (lite catches broadly and is bounded by `maxLoops`), and all tenant, BYOK and signup/payment work. Per-agent `executionMode: "delegate"` stays lite-only by design.
