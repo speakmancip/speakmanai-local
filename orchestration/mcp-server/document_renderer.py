@@ -322,7 +322,8 @@ def md_to_html(md_text: str):
         if re.match(r'^\d+\.\s', line):
             output.append('    <ol>\n')
             while i < len(lines) and re.match(r'^\d+\.\s', lines[i]):
-                output.append(f'      <li>{inline(re.sub(r"^\d+\.\s", "", lines[i]))}</li>\n')
+                item_text = re.sub(r'^\d+\.\s', '', lines[i])
+                output.append(f'      <li>{inline(item_text)}</li>\n')
                 i += 1
             output.append('    </ol>\n')
             continue

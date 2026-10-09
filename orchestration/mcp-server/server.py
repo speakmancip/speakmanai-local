@@ -256,6 +256,29 @@ async def submit_response(
             "Only call submit_response when poll_workflow returns status=AWAITING_INPUT."
         )
 
+    # Atomically claim the pause (AWAITING_INPUT -> IN_PROGRESS) BEFORE queueing the resume.
+    # Writing it afterwards could stomp a status the engine had already moved on — e.g. straight
+    # to the NEXT delegate pause, which is AWAITING_INPUT again, leaving poll_workflow showing
+    # IN_PROGRESS forever. Claiming first also rejects a duplicate submit for the same pause.
+    coll = db[COLLECTION]
+    if hasattr(coll, "update_one_if"):
+        claimed = await coll.update_one_if(
+            {"session_id": session_id}, {"$set": {"current_status": "IN_PROGRESS"}},
+            expected_field="current_status", expected_values=["AWAITING_INPUT"],
+        )
+    else:
+        result = await coll.update_one(
+            {"session_id": session_id, "current_status": "AWAITING_INPUT"},
+            {"$set": {"current_status": "IN_PROGRESS"}},
+        )
+        claimed = getattr(result, "matched_count", 0) > 0
+    if not claimed:
+        current_status = doc.get("current_status", "UNKNOWN")
+        raise RuntimeError(
+            f"Session {session_id} is not waiting for input (status: {current_status}) — "
+            "a response may already have been submitted for this step. Call poll_workflow first."
+        )
+
     step_index = mcp_input_config.get("step_index", 1)
     agent_id = mcp_input_config.get("agent_id", "MCP_INPUT_REQUIRED")
 
@@ -281,12 +304,6 @@ async def submit_response(
             "agentId": agent_id,
             "user_id": "local_user"
         })
-
-    # Clear AWAITING_INPUT state so poll_workflow reflects IN_PROGRESS immediately
-    await db[COLLECTION].update_one(
-        {"session_id": session_id},
-        {"$set": {"current_status": "IN_PROGRESS"}},
-    )
 
     return json.dumps({
         "ok": True,
@@ -506,8 +523,10 @@ async def _get_mcp_pause_config(doc: dict) -> dict | None:
         if hitl_loop > 0:
             # Re-pause after an "Update" — the feedback lives on the most recent hitl_retry
             # bookkeeping event (logged by _handle_hitl_response), not on this fresh pause event.
+            # Scoped to this pause's own step so a different agent's retry can never be picked up.
             last_retry = next(
-                (e for e in reversed(events) if e.get("attributes", {}).get("hitl_retry") == "true"),
+                (e for e in reversed(events) if e.get("attributes", {}).get("hitl_retry") == "true"
+                 and e.get("attributes", {}).get("current_step_index") == str(mcp_pause_step_index)),
                 None
             )
             prior_feedback = last_retry.get("data", {}).get("execution_context", {}).get("hitl_feedback", "") if last_retry else ""
