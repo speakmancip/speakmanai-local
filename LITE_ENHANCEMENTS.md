@@ -349,3 +349,15 @@ Swept every skill in `speakmanai-cc` for references to `RE_DOMAIN_MODELER_V1` / 
 - **HITL prior-feedback lookup scoped to its own step** (enterprise `0957ce8`): `_get_mcp_pause_config`'s `hitl_loop > 0` scan now also matches `current_step_index`. Hardening only: lite runs a session sequentially, and no path was found where another agent's `hitl_retry` could be the most recent one.
 
 **Not ported, and why:** Pub/Sub idempotency and out-of-order status guards (lite uses an in-process queue), the validator-resolution retry loop (lite catches broadly and is bounded by `maxLoops`), and all tenant, BYOK and signup/payment work. Per-agent `executionMode: "delegate"` stays lite-only by design.
+
+## FIXED (2026-10-09): garbled prompt characters; em dashes removed from all prompt text (v1.4.1)
+
+**Found by:** a post-v1.4.0 check comparing the shipped `WorkflowsAndAgents/*.json` against the local DB. `MCP_SOLUTION_ARCHITECTURE_V1.json` (65 + 5 arrows) and `MCP_CAPABILITY_GENERATOR_V1.json` (4 + 2 arrows) had UTF-8 punctuation stored double-encoded: `â€”`, `â€“`, curly quotes, `â†’`. Introduced in `e237b60` (2026-08-09), so shipped in v1.2.0 through v1.4.0. The owner's own DB had correct characters, which is why it went unnoticed.
+
+**Fix:** a text-level edit of the JSON files, so formatting and key order are untouched. Garbled sequences were decoded, then every em/en dash replaced: `\s*[—–]\s*` -> ` - `, digit ranges -> `2-5`, arrows -> `->`. Verified per file by parsing old and new and walking both trees: identical structure and keys, and every string equals the normalized old string. Model-facing code strings got the same treatment: `engine.py` (planner prompt, `PRESERVE_INSTRUCTION`, validator feedback) and `server.py` (MCP instructions, tool docstrings, tool result messages, prompts). Comments, logs and the `/setup` UI were left alone. Compiled under 3.12 and 3.8.
+
+**Rule going forward:** no em/en dashes in prompt text, recorded in the new repo `CLAUDE.md` with a byte-level grep check. The project owner set this rule.
+
+**Related gap, not fixed here:** `seed_if_empty` only imports workflows missing from the DB, by design (protects hand edits via `import_agent`). So prompt fixes, including v1.3.0's Requirements Engineering improvements and this one, never reach existing installs. The release notes tell upgraders how to re-import. A version-aware reseed (record the file version each workflow came from, update agents the user hasn't edited) would close it properly.
+
+**Owner's local DB synced 2026-10-09:** all 8 shipped files re-imported through the server's own `import_workflow`/`import_agent` (exe stopped, DB backed up first). Three stale agents (`RE_USE_CASE_ANALYST_V1`, `RE_USE_CASE_VALIDATOR_V1`, `MCP_BA_VAL_LOOP_V1`) had been running pre-v1.3.0 prompts. `MCP_TECHNICAL_WRITER_V2`, removed from the shipped Solution Architecture file back in v1.1.0 (`8755eab`) but still linked locally, was deleted at the owner's request.

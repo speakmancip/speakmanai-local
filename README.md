@@ -6,7 +6,7 @@
 
 Built-in workflows cover the whole idea-to-architecture arc — **Sizing**, **Solution Architecture**, **Requirements Engineering**, **UX Design** — plus a **Workflow Builder** for creating your own pipelines. Every workflow is a coordinated chain of AI agents that collaborate, validate each other's outputs, and (where the task calls for it) pause for a real human review before continuing.
 
-**Latest release: [v1.4.0](https://github.com/speakmancip/speakmanai-local/releases/tag/v1.4.0)**: Gemini 2.x is gone (Google is retiring it this month) and the Gemini/Vertex defaults move to the 3.x line, with saved configs migrated automatically on startup. Also fixes `update_session` cascades that left downstream agents unchanged. See [release notes](RELEASE_NOTES.md#v140).
+**Latest release: [v1.4.1](https://github.com/speakmancip/speakmanai-local/releases/tag/v1.4.1)**: fixes garbled punctuation in two bundled workflows and removes em dashes from all prompt text. Builds on [v1.4.0](RELEASE_NOTES.md#v140), which moved the Gemini/Vertex defaults to the 3.x line ahead of Google retiring Gemini 2.x. See [release notes](RELEASE_NOTES.md#v141).
 
 ---
 
