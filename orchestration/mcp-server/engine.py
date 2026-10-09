@@ -127,10 +127,10 @@ DEFAULT_PLANNER_SYSTEM_PROMPT = """You are a Workflow Planner. Your function is 
 Based on the USER_PROMPT and the list of AVAILABLE_AGENTS provided, you MUST generate a single, valid JSON object.
 Do not include the word "json", markdown backticks, or any explanation.
 
-step_type Rules — set step_type for each step based on the agent's Type field:
-- "AI"        — AI_WORKFLOW agents
-- "AGGREGATE" — AI_AGGREGATOR agents (parallel-branch workflows ONLY)
-- "MCP_PAUSE" — MCP_* agents (pause the workflow and wait for human/client input)
+step_type Rules - set step_type for each step based on the agent's Type field:
+- "AI" - AI_WORKFLOW agents
+- "AGGREGATE" - AI_AGGREGATOR agents (parallel-branch workflows ONLY)
+- "MCP_PAUSE" - MCP_* agents (pause the workflow and wait for human/client input)
 
 JSON Structure Requirement:
 {
@@ -1155,8 +1155,8 @@ async def _handle_process_step(event: dict, queue: asyncio.Queue):
 
     PRESERVE_INSTRUCTION = (
         "This is a targeted revision, not a rewrite: change only what the feedback below "
-        "actually calls out. Everything else in your previous output — every field, value, "
-        "component, and structural choice not mentioned — must carry over exactly as it was. "
+        "actually calls out. Everything else in your previous output - every field, value, "
+        "component, and structural choice not mentioned - must carry over exactly as it was. "
         "Do not regenerate the document from scratch and do not silently drop, rename, or "
         "restructure anything the feedback didn't ask you to touch."
     )
@@ -1310,7 +1310,7 @@ async def _handle_validate_step(event: dict, queue: asyncio.Queue):
             if critical_count > 0 or has_critical_in_list:
                 log.warning(f"[{session_id}] Critical violations detected (count={critical_count}) — overriding score {score} → 0")
                 score = 0.0
-                feedback = f"[{critical_count} CRITICAL VIOLATION(S) — score overridden] {feedback}"
+                feedback = f"[{critical_count} CRITICAL VIOLATION(S) - score overridden] {feedback}"
         except Exception as e:
             log.error(f"[{session_id}] Validation failed: {e}")
             score, feedback = 0, f"Validation parsing error: {e}"

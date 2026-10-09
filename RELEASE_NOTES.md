@@ -1,5 +1,23 @@
 # Release Notes
 
+## v1.4.1
+
+**Release:** https://github.com/speakmancip/speakmanai-local/releases/tag/v1.4.1
+
+### Fixed: garbled characters in two bundled workflows
+
+Since v1.2.0, `MCP_SOLUTION_ARCHITECTURE_V1` and `MCP_CAPABILITY_GENERATOR_V1` shipped with every dash, curly quote and arrow in their prompts mangled (`â€”` where an em dash belonged, `â†’` for an arrow): 76 instances across the two files, the result of the files passing through a Windows-1252 round trip. Models mostly read past it, but it was noise in every prompt those agents received. Both files are clean again.
+
+### Changed: no em dashes in prompt text
+
+Every agent prompt in every bundled workflow now uses plain ASCII punctuation: a spaced hyphen where an em dash was, `2-5` for ranges, `->` for arrows. The same applies to the text the server sends to models and MCP clients (the planner prompt, revision instructions, server instructions and tool descriptions). Punctuation in a prompt tends to show up in what the model writes, and em dashes are a recognizable AI-writing tell that generated documents shouldn't carry. The rule is now recorded in the repository's `CLAUDE.md`, with a check command, so later edits don't reintroduce it.
+
+### If you're upgrading
+
+The exe only imports a bundled workflow if it isn't in your database yet, so it never overwrites a workflow you may have customized. That also means an existing install keeps its stored copies of these prompts after upgrading. A fresh install gets the fixed versions automatically. To refresh an existing install, have your connected assistant re-import the workflow files from `WorkflowsAndAgents/` on GitHub (`import_workflow` for the header, then `import_agent` for each agent). This replaces any local edits you've made to those agents.
+
+---
+
 ## v1.4.0
 
 **Release:** https://github.com/speakmancip/speakmanai-local/releases/tag/v1.4.0

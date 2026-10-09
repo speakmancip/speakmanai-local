@@ -91,7 +91,7 @@ mcp = FastMCP(
         "SPEAKMAN.AI is a multi-agent workflow engine. You can run built-in workflows (e.g. Solution "
         "Architecture, Capability Generator) or any custom workflow built with the Workflow Builder. "
         "Each workflow is a pipeline of AI agents that collaborate to produce structured outputs.\n\n"
-        "WORKFLOW CALL CHAINS — follow exactly for the workflow type you are running:\n\n"
+        "WORKFLOW CALL CHAINS - follow exactly for the workflow type you are running:\n\n"
         "Standard workflow (most workflows, including MCP_SOLUTION_ARCHITECTURE_V1 and custom workflows):\n"
         "  1. list_workflows()  →  choose a workflow_id\n"
         "  2. start_session(workflow_id, title, description)  →  returns session_id immediately\n"
@@ -107,15 +107,15 @@ mcp = FastMCP(
         "  2. start_session(workflow_id, title=<group name>, description=<capabilities JSON array as string>)\n"
         "     → returns session_id immediately (description IS the capabilities payload)\n"
         "  3. poll_workflow(session_id)  →  wait for COMPLETED (~2-5 min)\n"
-        "  !! DO NOT call submit_response for Capability Generator — no AWAITING_INPUT step !!\n\n"
-        "poll_workflow returns status and completed_steps ONLY — never full content. "
+        "  !! DO NOT call submit_response for Capability Generator - no AWAITING_INPUT step !!\n\n"
+        "poll_workflow returns status and completed_steps ONLY - never full content. "
         "Always call get_outputs then get_output to retrieve content.\n\n"
         "When poll_workflow returns status=AWAITING_INPUT, it includes an input_required block "
         "with prompt, schema, context, and pause_id. Build your response and call submit_response, "
         "always passing pause_id so the response can only apply to the pause you actually read.\n\n"
         "Agent outputs are fetched individually to keep each response within context limits. "
         "get_outputs returns the manifest only; get_output returns one agent's full content.\n\n"
-        "get_outputs works on any past session_id — use it to resume downstream work across conversations.\n\n"
+        "get_outputs works on any past session_id - use it to resume downstream work across conversations.\n\n"
         "If a session is stuck or failed, call cancel_session(session_id) to free your concurrency slot.\n\n"
         "If you lose a session_id (context reset, new conversation), call list_sessions() to recover it."
     )
@@ -155,7 +155,7 @@ async def start_session(
 ) -> str:
     """
     Start a new workflow session and return a session_id immediately.
-    The workflow runs asynchronously — poll_workflow to track progress.
+    The workflow runs asynchronously - poll_workflow to track progress.
 
     Args:
         workflow_id: The workflow ID from list_workflows.
@@ -164,7 +164,7 @@ async def start_session(
         description: Context or payload for the workflow (max 10000 chars).
             - Most workflows: a plain-text description of what you want to accomplish.
             - Capability Generator (MCP_CAPABILITY_GENERATOR_V1): pass the capabilities JSON array
-              as a string — this IS the payload, not a description.
+              as a string - this IS the payload, not a description.
 
     Returns:
         session_id, credit_balance, and next_step instructions.
@@ -197,7 +197,7 @@ async def start_session(
     if is_capability_generator:
         next_step = (
             "Capability Generator is running. Call poll_workflow(session_id) to check status. "
-            "Typical runtime: 2-5 minutes. DO NOT call submit_response — no AWAITING_INPUT step."
+            "Typical runtime: 2-5 minutes. DO NOT call submit_response - no AWAITING_INPUT step."
         )
     else:
         next_step = (
@@ -225,7 +225,7 @@ async def submit_response(
     """
     Submit your response to a workflow that is waiting for input (status=AWAITING_INPUT).
 
-    Call poll_workflow first — when it returns status=AWAITING_INPUT, read the input_required
+    Call poll_workflow first - when it returns status=AWAITING_INPUT, read the input_required
     block (prompt, schema, context) to understand what to provide, then call this tool.
 
     For architecture workflows the response is a JSON array of capabilities.
@@ -289,7 +289,7 @@ async def submit_response(
     if not claimed:
         current_status = doc.get("current_status", "UNKNOWN")
         raise RuntimeError(
-            f"Session {session_id} is not waiting for input (status: {current_status}) — "
+            f"Session {session_id} is not waiting for input (status: {current_status}) - "
             "a response may already have been submitted for this step. Call poll_workflow first."
         )
 
@@ -367,7 +367,7 @@ async def poll_workflow(session_id: str, mcp_ctx: Context) -> str:
             "session_id": session_id,
             "status": "IN_PROGRESS",
             "completed_steps": [],
-            "message": "Session is starting — wait 30 seconds and poll again.",
+            "message": "Session is starting - wait 30 seconds and poll again.",
         }, indent=2)
 
     current_status = doc.get("current_status", "UNKNOWN")
@@ -409,7 +409,7 @@ async def poll_workflow(session_id: str, mcp_ctx: Context) -> str:
     is_system_session = session_workflow_type == "system"
 
     if is_failed:
-        error_msg = doc.get("error_message", "Workflow failed — check agent configuration.")
+        error_msg = doc.get("error_message", "Workflow failed - check agent configuration.")
         raise RuntimeError(f"Workflow {session_id} failed: {error_msg}")
 
     is_awaiting_input = current_status == "AWAITING_INPUT"
@@ -445,7 +445,7 @@ async def poll_workflow(session_id: str, mcp_ctx: Context) -> str:
                 "A human review checkpoint has been reached for the output of "
                 f"{mcp_input_config.get('origin_agent_id', 'the prior step')}. Read input_required.context "
                 "(the output under review, plus any named source-of-truth material) and input_required.prompt "
-                "(what to look for). Do NOT silently approve on your own judgment — surface the output to the "
+                "(what to look for). Do NOT silently approve on your own judgment - surface the output to the "
                 "actual user, ask clarifying questions if needed, and proactively point out any gaps or risks "
                 "you notice. Once the user has responded, call submit_response(session_id, response, "
                 "pause_id=input_required.pause_id) with "
@@ -505,7 +505,7 @@ def _compile_dependencies_context(agent_doc: dict, events: list) -> str:
 
 
 def _latest_pause_event(events: list) -> dict | None:
-    """The most recent MCP_PAUSE event — the pause a session in AWAITING_INPUT is waiting on.
+    """The most recent MCP_PAUSE event - the pause a session in AWAITING_INPUT is waiting on.
     Its event_id is the pause_id handed out by poll_workflow and checked by submit_response."""
     return next((e for e in reversed(events) if e.get("attributes", {}).get("event_type") == "MCP_PAUSE"), None)
 
@@ -515,7 +515,7 @@ async def _get_mcp_pause_config(doc: dict) -> dict | None:
     Resolve input_required config for a session in AWAITING_INPUT state.
 
     Reads step_type from the workflow plan and fetches prompt/schema directly
-    from the agent doc in the database — no dependency on embedded mcp_input_config.
+    from the agent doc in the database - no dependency on embedded mcp_input_config.
     """
     events = doc.get("events") or []
     # workflow_definition is carried in every event — read from the first.
@@ -722,7 +722,7 @@ def _aggregate_agent_index(events: list, human_agents: set) -> dict:
 async def get_outputs(session_id: str, mcp_ctx: Context) -> str:
     """
     Return the manifest of available agent outputs for a completed workflow session.
-    Does NOT return content — call get_output(session_id, agent_id) for each output you need.
+    Does NOT return content - call get_output(session_id, agent_id) for each output you need.
 
     Works on any past session_id so you can resume downstream work across conversations.
 
@@ -744,7 +744,7 @@ async def get_outputs(session_id: str, mcp_ctx: Context) -> str:
     current_status = doc.get("current_status", "UNKNOWN")
     if current_status == "CANCELLED":
         raise RuntimeError(
-            f"Session {session_id} was cancelled — no outputs are available. "
+            f"Session {session_id} was cancelled - no outputs are available. "
             "Start a new session to generate a complete workflow."
         )
 
@@ -787,14 +787,14 @@ async def get_outputs(session_id: str, mcp_ctx: Context) -> str:
         "document_capabilities": document_capabilities,
         "suggested_next_steps": (
             [
-                "Capabilities have been extracted and saved to your local library — no get_output call needed.",
+                "Capabilities have been extracted and saved to your local library - no get_output call needed.",
                 f"A capability group was {'created' if len(document_capabilities) >= 10 else 'not created (fewer than 10 capabilities saved)'} for this session.",
                 "To run a Solution Architecture workflow using these capabilities: call list_workflows, choose an architecture workflow_id, then call start_session with a title and business description.",
             ]
             if "CAPABILITY_GENERATOR" in workflow_id.upper()
             else [
-                "Call get_output(session_id, agent_id) for each output you need — fetch only what is relevant to your task.",
-                "For the full solution architecture: fetch MCP_BUSINESS_CONTEXT_CLARIFIER_V1, MCP_BUSINESS_ANALYST_V1, MCP_BUSINESS_APPLICATION_ARCHITECT_V1, MCP_TECHNICAL_SOLUTION_ARCHITECT_V1 — each agent is a self-contained deliverable.",
+                "Call get_output(session_id, agent_id) for each output you need - fetch only what is relevant to your task.",
+                "For the full solution architecture: fetch MCP_BUSINESS_CONTEXT_CLARIFIER_V1, MCP_BUSINESS_ANALYST_V1, MCP_BUSINESS_APPLICATION_ARCHITECT_V1, MCP_TECHNICAL_SOLUTION_ARCHITECT_V1 - each agent is a self-contained deliverable.",
                 "For PowerPoint: fetch MCP_TECHNICAL_SOLUTION_ARCHITECT_V1 and MCP_TECHNICAL_VISUALIZATION_SPECIALIST_V1, then use python-pptx.",
                 "For dev planning / ADR register: fetch MCP_TECHNICAL_SOLUTION_ARCHITECT_V1 and MCP_BUSINESS_APPLICATION_ARCHITECT_V1.",
                 "For compliance report: fetch MCP_COMPLIANCE_OFFICER_V2.",
@@ -831,7 +831,7 @@ async def get_output(session_id: str, agent_id: str) -> str:
 
     if doc.get("current_status") == "CANCELLED":
         raise RuntimeError(
-            f"Session {session_id} was cancelled — no outputs are available. "
+            f"Session {session_id} was cancelled - no outputs are available. "
             "Start a new session to generate a complete workflow."
         )
 
@@ -872,18 +872,18 @@ async def list_sessions(limit: int = 10) -> str:
 
     Returns:
         List of sessions ordered by most recent first, each with:
-          session_id     — pass to poll_workflow, get_outputs, get_output, cancel_session
-          title          — the title supplied to start_session
-          workflow_id    — identifies the workflow type and therefore the correct call chain
-          status         — one of:
+          session_id - pass to poll_workflow, get_outputs, get_output, cancel_session
+          title - the title supplied to start_session
+          workflow_id - identifies the workflow type and therefore the correct call chain
+          status - one of:
                            COMPLETED          → call get_outputs then get_output to retrieve content
                            AWAITING_INPUT      → call submit_response to continue the workflow
                            IN_PROGRESS        → call poll_workflow to check progress (poll every 30s)
                            FAILED             → call cancel_session to free your slot, then start_session
                            CANCELLED          → session is closed; start a new session
-          awaiting_input — true when status is AWAITING_INPUT (submit_response required)
-          created_at     — ISO 8601 timestamp
-          completed_steps — number of agent steps that have finished
+          awaiting_input - true when status is AWAITING_INPUT (submit_response required)
+          created_at - ISO 8601 timestamp
+          completed_steps - number of agent steps that have finished
     """
     db = get_db(os.environ.get("RAW_EVENTS_DB_NAME", "speakmanai_db"))
     COLLECTION = os.environ.get("RAW_EVENTS_COLLECTION", "events_raw")
@@ -989,11 +989,11 @@ async def update_session(session_id: str, agent_id: str, update_content: str) ->
 
     Args:
         session_id: The session_id of a COMPLETED or CANCELLED session (from list_sessions).
-        agent_id:   The agent whose output to revise — an agent_id from get_outputs' available_outputs.
+        agent_id:   The agent whose output to revise - an agent_id from get_outputs' available_outputs.
         update_content: What should change, in your own words.
 
     Returns:
-        Confirmation the cascade has started — poll_workflow(session_id) exactly like a fresh run.
+        Confirmation the cascade has started - poll_workflow(session_id) exactly like a fresh run.
     """
     if not agent_id or not agent_id.strip():
         raise ValueError("agent_id must be a non-empty string.")
@@ -1036,7 +1036,7 @@ async def update_session(session_id: str, agent_id: str, update_content: str) ->
             f"Session {session_id} cannot be updated right now (status: {current_status}). "
             "update_session only works on a COMPLETED or CANCELLED session. If it is IN_PROGRESS "
             "or AWAITING_INPUT, call cancel_session(session_id) first, then retry update_session. "
-            "If it is already DRAFT, an update is already in progress — poll_workflow instead."
+            "If it is already DRAFT, an update is already in progress - poll_workflow instead."
         )
 
     await workflow_queue.put({
@@ -1085,9 +1085,9 @@ async def get_project(session_id: str) -> str:
 
     The response includes a capabilities block that tells you exactly what operations
     are available for this project:
-      can_generate_document — true if sections exist; call generate_document to assemble
+      can_generate_document - true if sections exist; call generate_document to assemble
 
-    Sections are listed by title/agent — each is a panel of the workflow output.
+    Sections are listed by title/agent - each is a panel of the workflow output.
     Call generate_document to produce derived artefacts on demand.
 
     Args:
@@ -1263,7 +1263,7 @@ async def import_agent(agent_json: str) -> str:
 async def generate_document(session_id: str, format: str = "document") -> str:
     """
     Assemble workflow sections into a formatted document via AI.
-    The result is cached in the project record — subsequent calls regenerate it.
+    The result is cached in the project record - subsequent calls regenerate it.
 
     Check get_project(session_id).capabilities.can_generate_document before calling.
     Returns 400 if the project has no sections.
@@ -1289,10 +1289,10 @@ async def generate_document(session_id: str, format: str = "document") -> str:
 async def render_document(markdown: str, title: str = "", subtitle: str = "") -> str:
     """
     Convert a Markdown document into a fully self-contained, SPEAKMAN.AI-branded HTML document
-    (inline CSS, base64 logo — no external files, no local Python/Node required).
+    (inline CSS, base64 logo - no external files, no local Python/Node required).
 
     To rebrand: edit the returned HTML directly (swap the logo <img> src and the header/accent
-    CSS custom properties) — there is no template file system.
+    CSS custom properties) - there is no template file system.
 
     Args:
         markdown: The document body as Markdown (already synthesized by the caller).
@@ -1333,7 +1333,7 @@ async def architecture_brief(system_name: str, business_context: str) -> str:
         "6. Call submit_response(session_id, json_capabilities_string, pause_id=input_required.pause_id) to continue the pipeline\n"
         "7. Poll with poll_workflow() every 30-60 seconds until status is COMPLETED\n"
         "8. Call get_outputs() to get the manifest, then get_output() for each agent deliverable\n\n"
-        "Individual agent outputs are the deliverables — fetch each with get_output(session_id, agent_id). "
+        "Individual agent outputs are the deliverables - fetch each with get_output(session_id, agent_id). "
         "Key outputs: MCP_BUSINESS_CONTEXT_CLARIFIER_V1 (business context), MCP_BUSINESS_ANALYST_V1 (requirements + personas), "
         "MCP_BUSINESS_APPLICATION_ARCHITECT_V1 (component catalog + data flows), MCP_TECHNICAL_SOLUTION_ARCHITECT_V1 (tech arch + ADRs), "
         "MCP_COMPLIANCE_OFFICER_V2 (compliance + RTM), MCP_TECHNICAL_VISUALIZATION_SPECIALIST_V1 (Mermaid diagram)."
