@@ -98,7 +98,7 @@ mcp = FastMCP(
         "  3. poll_workflow(session_id) every 30s  →  wait for status AWAITING_INPUT or COMPLETED\n"
         "  4. When AWAITING_INPUT: review input_required.prompt and input_required.schema\n"
         "     Build the requested data matching the schema\n"
-        "  5. submit_response(session_id, response)  →  pipeline continues\n"
+        "  5. submit_response(session_id, response, pause_id=input_required.pause_id)  →  pipeline continues\n"
         "  6. poll_workflow(session_id) every 30-60s  →  wait for status COMPLETED\n"
         "  7. get_outputs(session_id)  →  returns manifest: available_outputs[], document_capabilities[], suggested_next_steps[]\n"
         "  8. get_output(session_id, agent_id)  →  full content of one agent (call once per agent you need)\n\n"
@@ -111,7 +111,8 @@ mcp = FastMCP(
         "poll_workflow returns status and completed_steps ONLY — never full content. "
         "Always call get_outputs then get_output to retrieve content.\n\n"
         "When poll_workflow returns status=AWAITING_INPUT, it includes an input_required block "
-        "with prompt, schema, and context. Build your response and call submit_response.\n\n"
+        "with prompt, schema, context, and pause_id. Build your response and call submit_response, "
+        "always passing pause_id so the response can only apply to the pause you actually read.\n\n"
         "Agent outputs are fetched individually to keep each response within context limits. "
         "get_outputs returns the manifest only; get_output returns one agent's full content.\n\n"
         "get_outputs works on any past session_id — use it to resume downstream work across conversations.\n\n"
@@ -202,7 +203,7 @@ async def start_session(
         next_step = (
             "Workflow started. Call poll_workflow(session_id) every 15-30 seconds. "
             "When status is AWAITING_INPUT, read input_required.prompt and input_required.schema, "
-            "build your response, then call submit_response(session_id, response). "
+            "build your response, then call submit_response(session_id, response, pause_id=input_required.pause_id). "
             "After submission, poll again until COMPLETED."
         )
 
@@ -219,6 +220,7 @@ async def start_session(
 async def submit_response(
     session_id: str,
     response: str,
+    pause_id: str = "",
 ) -> str:
     """
     Submit your response to a workflow that is waiting for input (status=AWAITING_INPUT).
@@ -235,6 +237,10 @@ async def submit_response(
     Args:
         session_id: The session_id from start_session
         response:   Your response as a string (JSON-encoded array/object for structured inputs)
+        pause_id:   input_required.pause_id from the poll_workflow call you're answering.
+                    Optional, but always pass it: it guarantees your response is applied to the
+                    pause you actually read, and is rejected if the workflow has since moved on
+                    (e.g. a repeated submit would otherwise land on the NEXT pause).
     """
     if not response or not response.strip():
         raise ValueError("response must be a non-empty string.")
@@ -254,6 +260,50 @@ async def submit_response(
         raise RuntimeError(
             f"Session {session_id} is not waiting for input (status: {current_status}). "
             "Only call submit_response when poll_workflow returns status=AWAITING_INPUT."
+        )
+
+    current_pause_id = mcp_input_config.get("pause_id", "")
+    if pause_id and pause_id != current_pause_id:
+        raise RuntimeError(
+            f"Stale pause_id for session {session_id}: this response was for pause {pause_id}, but the "
+            f"workflow is now waiting on pause {current_pause_id} ({mcp_input_config.get('agent_id', '')}). "
+            "It has probably already been answered. Call poll_workflow to see what's needed now."
+        )
+
+    # Atomically claim the pause (AWAITING_INPUT -> IN_PROGRESS) BEFORE queueing the resume.
+    # Writing it afterwards could stomp a status the engine had already moved on — e.g. straight
+    # to the NEXT delegate pause, which is AWAITING_INPUT again, leaving poll_workflow showing
+    # IN_PROGRESS forever. Claiming first also rejects a duplicate submit for the same pause.
+    coll = db[COLLECTION]
+    if hasattr(coll, "update_one_if"):
+        claimed = await coll.update_one_if(
+            {"session_id": session_id}, {"$set": {"current_status": "IN_PROGRESS"}},
+            expected_field="current_status", expected_values=["AWAITING_INPUT"],
+        )
+    else:
+        result = await coll.update_one(
+            {"session_id": session_id, "current_status": "AWAITING_INPUT"},
+            {"$set": {"current_status": "IN_PROGRESS"}},
+        )
+        claimed = getattr(result, "matched_count", 0) > 0
+    if not claimed:
+        current_status = doc.get("current_status", "UNKNOWN")
+        raise RuntimeError(
+            f"Session {session_id} is not waiting for input (status: {current_status}) — "
+            "a response may already have been submitted for this step. Call poll_workflow first."
+        )
+
+    # The claim only checks status, not WHICH pause. If a previous submit's resume wrote a new
+    # pause between our read above and the claim, we'd now hold that new pause while having
+    # resolved routing for the old one. Re-read and confirm; if it moved, release the claim
+    # (safe: nothing has been queued yet, so nothing else can touch the session) and reject.
+    fresh_doc = await coll.find_one({"session_id": session_id})
+    fresh_pause = _latest_pause_event((fresh_doc or {}).get("events") or [])
+    if (fresh_pause or {}).get("event_id", "") != current_pause_id:
+        await coll.update_one({"session_id": session_id}, {"$set": {"current_status": "AWAITING_INPUT"}})
+        raise RuntimeError(
+            f"Session {session_id} moved on to a new pause while this response was being submitted. "
+            "Call poll_workflow to see what's needed now."
         )
 
     step_index = mcp_input_config.get("step_index", 1)
@@ -281,12 +331,6 @@ async def submit_response(
             "agentId": agent_id,
             "user_id": "local_user"
         })
-
-    # Clear AWAITING_INPUT state so poll_workflow reflects IN_PROGRESS immediately
-    await db[COLLECTION].update_one(
-        {"session_id": session_id},
-        {"$set": {"current_status": "IN_PROGRESS"}},
-    )
 
     return json.dumps({
         "ok": True,
@@ -336,7 +380,9 @@ async def poll_workflow(session_id: str, mcp_ctx: Context) -> str:
 
     human_agents = await _build_human_exclusion_set(events, additional_exclusions)
     agent_index = _aggregate_agent_index(events, human_agents)
-    # completed_steps ordered by step index
+    # completed_steps ordered by each agent's most recent output, so agents re-run by an
+    # update_session cascade move to the end, reflecting what just ran
+    # rather than workflow step order.
     completed_steps = [
         aid for aid, _ in sorted(agent_index.items(), key=lambda x: x[1]["index"])
     ]
@@ -382,6 +428,7 @@ async def poll_workflow(session_id: str, mcp_ctx: Context) -> str:
             "context": mcp_input_config.get("context", ""),
             "agent_id": mcp_input_config.get("agent_id", ""),
             "agent_type": agent_type,
+            "pause_id": mcp_input_config.get("pause_id", ""),
         }
         if mcp_input_config.get("origin_agent_id"):
             result["input_required"]["origin_agent_id"] = mcp_input_config["origin_agent_id"]
@@ -391,7 +438,7 @@ async def poll_workflow(session_id: str, mcp_ctx: Context) -> str:
                 "The workflow has paused and is delegating this execution step to YOU (the connected AI assistant). "
                 "Do NOT ask the user for this information. Read input_required.prompt, input_required.context, "
                 "and input_required.schema. Execute the task yourself using your own capabilities, "
-                "then immediately call submit_response(session_id, response) with the result."
+                "then immediately call submit_response(session_id, response, pause_id=input_required.pause_id) with the result."
             )
         elif agent_type == "HITL_VALIDATOR":
             result["message"] = (
@@ -400,7 +447,8 @@ async def poll_workflow(session_id: str, mcp_ctx: Context) -> str:
                 "(the output under review, plus any named source-of-truth material) and input_required.prompt "
                 "(what to look for). Do NOT silently approve on your own judgment — surface the output to the "
                 "actual user, ask clarifying questions if needed, and proactively point out any gaps or risks "
-                "you notice. Once the user has responded, call submit_response(session_id, response) with "
+                "you notice. Once the user has responded, call submit_response(session_id, response, "
+                "pause_id=input_required.pause_id) with "
                 '{"status": "Approved"} or {"status": "Update", "feedback": "<what to change>"} per '
                 "input_required.schema."
             )
@@ -408,7 +456,7 @@ async def poll_workflow(session_id: str, mcp_ctx: Context) -> str:
             result["message"] = (
                 "Workflow is waiting for human input. Ask the user to provide the information requested in "
                 "input_required.prompt. Once they answer, format it according to input_required.schema "
-                "and call submit_response(session_id, response)."
+                "and call submit_response(session_id, response, pause_id=input_required.pause_id)."
             )
     elif is_completed:
         result["message"] = (
@@ -456,6 +504,12 @@ def _compile_dependencies_context(agent_doc: dict, events: list) -> str:
     return "\n\n".join(compiled_parts) if compiled_parts else ""
 
 
+def _latest_pause_event(events: list) -> dict | None:
+    """The most recent MCP_PAUSE event — the pause a session in AWAITING_INPUT is waiting on.
+    Its event_id is the pause_id handed out by poll_workflow and checked by submit_response."""
+    return next((e for e in reversed(events) if e.get("attributes", {}).get("event_type") == "MCP_PAUSE"), None)
+
+
 async def _get_mcp_pause_config(doc: dict) -> dict | None:
     """
     Resolve input_required config for a session in AWAITING_INPUT state.
@@ -470,15 +524,12 @@ async def _get_mcp_pause_config(doc: dict) -> dict | None:
 
     # Find the MCP_PAUSE event to get the active step index and the prior output as context.
     mcp_pause_step_index = None
-    mcp_pause_event = None
-    for event in reversed(events):
-        if event.get("attributes", {}).get("event_type") == "MCP_PAUSE":
-            mcp_pause_event = event
-            try:
-                mcp_pause_step_index = int(event.get("attributes", {}).get("current_step_index", -1))
-            except (TypeError, ValueError):
-                pass
-            break
+    mcp_pause_event = _latest_pause_event(events)
+    if mcp_pause_event:
+        try:
+            mcp_pause_step_index = int(mcp_pause_event.get("attributes", {}).get("current_step_index", -1))
+        except (TypeError, ValueError):
+            pass
 
     if mcp_pause_step_index is None:
         return None
@@ -504,8 +555,10 @@ async def _get_mcp_pause_config(doc: dict) -> dict | None:
         if hitl_loop > 0:
             # Re-pause after an "Update" — the feedback lives on the most recent hitl_retry
             # bookkeeping event (logged by _handle_hitl_response), not on this fresh pause event.
+            # Scoped to this pause's own step so a different agent's retry can never be picked up.
             last_retry = next(
-                (e for e in reversed(events) if e.get("attributes", {}).get("hitl_retry") == "true"),
+                (e for e in reversed(events) if e.get("attributes", {}).get("hitl_retry") == "true"
+                 and e.get("attributes", {}).get("current_step_index") == str(mcp_pause_step_index)),
                 None
             )
             prior_feedback = last_retry.get("data", {}).get("execution_context", {}).get("hitl_feedback", "") if last_retry else ""
@@ -517,6 +570,7 @@ async def _get_mcp_pause_config(doc: dict) -> dict | None:
             "schema": hitl_agent_doc.get("inputSchema", {}) if hitl_agent_doc else {},
             "context": hitl_context,
             "step_index": mcp_pause_step_index,
+            "pause_id": mcp_pause_event.get("event_id", ""),
             "agent_id": hitl_agent_id,
             "agent_type": "HITL_VALIDATOR",
             "pause_kind": "hitl_feedback",
@@ -593,6 +647,7 @@ async def _get_mcp_pause_config(doc: dict) -> dict | None:
         "schema": schema,
         "context": context,
         "step_index": mcp_pause_step_index,
+        "pause_id": mcp_pause_event.get("event_id", ""),
         "agent_id": agent_id,
         "agent_type": agent_type,
     }
@@ -1275,7 +1330,7 @@ async def architecture_brief(system_name: str, business_context: str) -> str:
         "3. Poll poll_workflow(session_id) every 30 seconds until status is AWAITING_INPUT\n"
         "4. When status is AWAITING_INPUT: read input_required.prompt and input_required.schema\n"
         "5. Build the requested capabilities list matching the schema\n"
-        "6. Call submit_response(session_id, json_capabilities_string) to continue the pipeline\n"
+        "6. Call submit_response(session_id, json_capabilities_string, pause_id=input_required.pause_id) to continue the pipeline\n"
         "7. Poll with poll_workflow() every 30-60 seconds until status is COMPLETED\n"
         "8. Call get_outputs() to get the manifest, then get_output() for each agent deliverable\n\n"
         "Individual agent outputs are the deliverables — fetch each with get_output(session_id, agent_id). "
@@ -1302,7 +1357,7 @@ async def resume_session() -> str:
         "3. Based on the session status:\n"
         "   - COMPLETED: call get_outputs(session_id) to get the manifest, "
         "then get_output(session_id, agent_id) for each agent you need\n"
-        "   - AWAITING_INPUT: call poll_workflow to get input_required, then submit_response(session_id, response)\n"
+        "   - AWAITING_INPUT: call poll_workflow to get input_required, then submit_response(session_id, response, pause_id=input_required.pause_id)\n"
         "   - IN_PROGRESS: call poll_workflow(session_id) every 30-60 seconds until COMPLETED\n"
         "   - FAILED or stuck: call cancel_session(session_id) to free your concurrency slot, "
         "then start a new session with start_session()"
@@ -1424,7 +1479,7 @@ async def quit_server():
 _CONFIG_PATH = Path.home() / ".speakmanai" / "config.json"
 
 _PROVIDER_MODELS = {
-    "gemini":    {"fast": "gemini-2.5-flash-lite", "standard": "gemini-2.5-flash",  "advanced": "gemini-2.5-pro"},
+    "gemini":    {"fast": "gemini-3.5-flash-lite", "standard": "gemini-3.8-flash",  "advanced": "gemini-3.1-pro-preview"},
     "anthropic": {"fast": "claude-haiku-4-5-20251001", "standard": "claude-sonnet-4-6", "advanced": "claude-opus-4-8"},
     "openai":    {"fast": "gpt-4o-mini",           "standard": "gpt-4o",            "advanced": "gpt-4o"},
     "ollama":    {"fast": "",                       "standard": "",                  "advanced": ""},
@@ -1685,10 +1740,10 @@ def _build_setup_html(cfg: dict) -> str:
 
 <script>
 const MODELS = {{
-  gemini:    {{ fast: ['gemini-2.5-flash-lite','gemini-2.5-flash','gemini-3.1-flash-lite'], standard: ['gemini-2.5-flash','gemini-2.5-flash-lite','gemini-3-flash-preview'], advanced: ['gemini-2.5-pro','gemini-2.5-flash','gemini-3.1-pro-preview'] }},
+  gemini:    {{ fast: ['gemini-3.5-flash-lite','gemini-3.1-flash-lite','gemini-3.8-flash'], standard: ['gemini-3.8-flash','gemini-3-flash-preview','gemini-3.5-flash-lite'], advanced: ['gemini-3.1-pro-preview','gemini-3.8-flash'] }},
   anthropic: {{ fast: ['claude-haiku-4-5-20251001','claude-sonnet-4-6'], standard: ['claude-sonnet-4-6','claude-haiku-4-5-20251001','claude-sonnet-5'], advanced: ['claude-opus-4-8','claude-sonnet-4-6','claude-sonnet-5','claude-fable-5'] }},
   openai:    {{ fast: ['gpt-4o-mini','gpt-4o'], standard: ['gpt-4o','gpt-4o-mini'], advanced: ['gpt-4o','gpt-4o-mini'] }},
-  vertexai:  {{ fast: ['gemini-2.5-flash-lite','gemini-2.5-flash','gemini-3.1-flash-lite'], standard: ['gemini-2.5-flash','gemini-2.5-flash-lite','gemini-3-flash-preview'], advanced: ['gemini-2.5-pro','gemini-2.5-flash','gemini-3.1-pro-preview'] }},
+  vertexai:  {{ fast: ['gemini-3.5-flash-lite','gemini-3.1-flash-lite','gemini-3.8-flash'], standard: ['gemini-3.8-flash','gemini-3-flash-preview','gemini-3.5-flash-lite'], advanced: ['gemini-3.1-pro-preview','gemini-3.8-flash'] }},
   ollama:    {{ fast: [], standard: [], advanced: [] }},
 }};
 

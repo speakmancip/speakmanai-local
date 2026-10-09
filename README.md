@@ -6,7 +6,7 @@
 
 Built-in workflows cover the whole idea-to-architecture arc — **Sizing**, **Solution Architecture**, **Requirements Engineering**, **UX Design** — plus a **Workflow Builder** for creating your own pipelines. Every workflow is a coordinated chain of AI agents that collaborate, validate each other's outputs, and (where the task calls for it) pause for a real human review before continuing.
 
-**Latest release: [v1.3.0](https://github.com/speakmancip/speakmanai-local/releases/tag/v1.3.0)** — server-side document rendering with no local Python/Node dependency, confirmed working end-to-end in Microsoft Copilot Studio, plus 4 HITL-surfaced bug fixes and a Requirements Engineering decomposition. See [release notes](RELEASE_NOTES.md#v130).
+**Latest release: [v1.4.0](https://github.com/speakmancip/speakmanai-local/releases/tag/v1.4.0)**: Gemini 2.x is gone (Google is retiring it this month) and the Gemini/Vertex defaults move to the 3.x line, with saved configs migrated automatically on startup. Also fixes `update_session` cascades that left downstream agents unchanged. See [release notes](RELEASE_NOTES.md#v140).
 
 ---
 
@@ -93,7 +93,7 @@ The delegate-first sibling of the workflow builder above. Produces workflows whe
 
 | Provider | Fast | Standard | Advanced |
 |---|---|---|---|
-| **Gemini** (recommended) | `gemini-2.5-flash-lite` | `gemini-2.5-flash` | `gemini-2.5-pro` |
+| **Gemini** (recommended) | `gemini-3.5-flash-lite` | `gemini-3.8-flash` | `gemini-3.1-pro-preview` |
 | **Claude** | `claude-haiku-4-5` | `claude-sonnet-4-6` | `claude-opus-4-8` |
 | **OpenAI** | `gpt-4o-mini` | `gpt-4o` | `gpt-4o` |
 | **Ollama** | Local inference — 14B+ model strongly recommended (see below) | | |

@@ -35,7 +35,7 @@ def _cfg():
     """Return current provider config from environment (live — no restart needed)."""
     return {
         "provider":        os.environ.get("LLM_PROVIDER", "gemini").lower(),
-        "default_model":   os.environ.get("DEFAULT_MODEL", "gemini-2.5-flash-lite"),
+        "default_model":   os.environ.get("DEFAULT_MODEL", "gemini-3.5-flash-lite"),
         "standard_model":  os.environ.get("STANDARD_MODEL", ""),
         "advanced_model":  os.environ.get("ADVANCED_MODEL", ""),
         "ollama_url":      os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
@@ -50,7 +50,7 @@ def _cfg():
 # Keep module-level aliases for any code that references them directly (backwards compat)
 # These reflect startup values only — use _cfg() inside functions for live values.
 LLM_PROVIDER        = os.environ.get("LLM_PROVIDER", "gemini").lower()
-DEFAULT_MODEL       = os.environ.get("DEFAULT_MODEL", "gemini-2.5-flash-lite")
+DEFAULT_MODEL       = os.environ.get("DEFAULT_MODEL", "gemini-3.5-flash-lite")
 STANDARD_MODEL      = os.environ.get("STANDARD_MODEL", "")
 ADVANCED_MODEL      = os.environ.get("ADVANCED_MODEL", "")
 OLLAMA_BASE_URL     = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
@@ -58,8 +58,8 @@ OLLAMA_FALLBACK_MODEL = os.environ.get("OLLAMA_FALLBACK_MODEL", "llama3")
 
 # ── Abstract model tier → provider model mapping ──────────────────────────
 MODEL_TIERS = {
-    "gemini":    {"fast": "gemini-2.5-flash-lite", "standard": "gemini-2.5-flash", "advanced": "gemini-2.5-pro"},
-    "vertexai":  {"fast": "gemini-2.5-flash-lite", "standard": "gemini-2.5-flash", "advanced": "gemini-2.5-pro"},
+    "gemini":    {"fast": "gemini-3.5-flash-lite", "standard": "gemini-3.8-flash", "advanced": "gemini-3.1-pro-preview"},
+    "vertexai":  {"fast": "gemini-3.5-flash-lite", "standard": "gemini-3.8-flash", "advanced": "gemini-3.1-pro-preview"},
     "anthropic": {"fast": "claude-haiku-4-5-20251001", "standard": "claude-sonnet-4-6", "advanced": "claude-opus-4-8"},
     "openai":    {"fast": "gpt-4o-mini",       "standard": "gpt-4o",           "advanced": "gpt-4o"},
     "ollama":    {"fast": None,                 "standard": None,               "advanced": None},
@@ -67,11 +67,9 @@ MODEL_TIERS = {
 
 # Reverse map: known model name → tier (used for cross-provider conflict resolution)
 _MODEL_TO_TIER = {
-    "gemini-2.5-pro": "advanced",   "gemini-2.5-flash": "standard",
-    "gemini-2.5-flash-lite": "fast",
-    "gemini-2.0-pro": "advanced",   "gemini-2.0-flash": "fast",
-    "gemini-3.1-pro-preview": "advanced", "gemini-3-flash-preview": "standard",
-    "gemini-3.1-flash-lite": "fast",
+    "gemini-3.1-pro-preview": "advanced", "gemini-3.8-flash": "standard",
+    "gemini-3-flash-preview": "standard",
+    "gemini-3.5-flash-lite": "fast", "gemini-3.1-flash-lite": "fast",
     "claude-opus-4-8": "advanced",  "claude-sonnet-4-6": "standard",
     "claude-haiku-4-5-20251001": "fast", "claude-haiku-4-5": "fast",
     "claude-sonnet-5": "standard",  "claude-fable-5": "advanced",
@@ -441,6 +439,18 @@ def _latest_output_for_agent(agent_id: str, events: list) -> str:
     return latest
 
 
+def _latest_update_request(events: list) -> tuple[str, str]:
+    """(origin agent_id, requested change) of the update_session cascade in flight — read off the
+    most recent update_retry event that _handle_update_session wrote. Downstream cascade steps
+    need the ORIGIN of the update, not merely whichever step happened to run just before them."""
+    for event in reversed(events):
+        if event.get("attributes", {}).get("update_retry") == "true":
+            exec_ctx = event.get("data", {}).get("execution_context", {})
+            return (exec_ctx.get("source_outputs", {}).get("source_agent_id", ""),
+                    exec_ctx.get("update_feedback", ""))
+    return "", ""
+
+
 async def _resolve_downstream_agents(workflow_id: str, agent_id: str, db) -> set:
     """Fixed-point walk of the dependencies graph declared on each agent's DB doc — everything
     transitively depending on agent_id, direct or indirect. Wildcard ("*") dependents
@@ -538,10 +548,20 @@ async def _emit_advance_event(session_id: str, db, queue: asyncio.Queue, workflo
             fresh_doc = await db["events_raw"].find_one({"session_id": session_id})
             fresh_events = fresh_doc.get("events", []) if fresh_doc else []
             exec_ctx["previous_output"] = _latest_output_for_agent(next_agent_id, fresh_events)
+            origin_agent_id, update_request = _latest_update_request(fresh_events)
+            origin_agent_id = origin_agent_id or agent_id
+            exec_ctx["update_origin_agent_id"] = origin_agent_id
             exec_ctx["update_feedback"] = (
-                f"Upstream agent '{agent_id}' was just revised as part of a project update. "
-                "Re-check your own output against its new content and adjust anything that's "
-                "no longer consistent with it — otherwise leave your output unchanged."
+                f"Upstream agent '{origin_agent_id}' was revised as part of a project update, "
+                "in response to the change request below. That request (including any "
+                "'change nothing else' wording) was addressed to that agent, not to you.\n"
+                f"--- change request to {origin_agent_id} ---\n{update_request or '(not recorded)'}\n"
+                "--- end change request ---\n\n"
+                "Your previous output was written against the OLD upstream content. The CONTEXT "
+                "sections above already contain the REVISED content. Compare them against your "
+                "previous output and update every finding, score, gap, risk, control, or statement "
+                "that the revision changes, resolves, or newly introduces within your remit. "
+                "Leave anything the revision does not affect unchanged."
             )
 
     new_event = {
@@ -1170,10 +1190,20 @@ async def _handle_process_step(event: dict, queue: asyncio.Queue):
             f"\n\n# YOUR PREVIOUS OUTPUT (Attempt {update_attempt})\n{previous_output}"
             if previous_output else ""
         )
+        # A downstream cascade step isn't the target of the change request itself — its job is
+        # to absorb the revised upstream context. PRESERVE_INSTRUCTION's "change only what the
+        # feedback calls out" reads as "change nothing" there, so it gets its own framing.
+        is_downstream = bool(exec_ctx.get("update_origin_agent_id"))
+        instruction = (
+            "This is a revision driven by changed upstream inputs, not a rewrite: keep your "
+            "structure and everything the upstream change does not affect, but your output must "
+            "reflect the revised upstream content."
+            if is_downstream else f"{PRESERVE_INSTRUCTION} Address the requested change below:"
+        )
         user_content += (
             f"{prior_block}\n\n"
             f"# PROJECT UPDATE REQUEST (Attempt {update_attempt})\n"
-            f"{PRESERVE_INSTRUCTION} Address the requested change below:\n"
+            f"{instruction}\n"
             f"{update_feedback}"
         )
 
