@@ -28,7 +28,7 @@ Downstream agents are now told which agent the update started from and what the 
 
 ### Under the hood
 - `render_document` failed under Docker. One line in `document_renderer.py` used a backslash inside an f-string expression, which is a syntax error before Python 3.12, and the Docker image runs 3.11. The Windows exe bundles 3.12, which is why it never showed up there.
-- `submit_response` used to mark the session `IN_PROGRESS` after queueing the resume, which could overwrite a status the engine had already moved on. If the resume reached the next delegate pause first, the session ended up showing `IN_PROGRESS` while it was actually waiting, and a client polling for input would wait forever. The pause is now claimed atomically before the resume is queued, which also rejects a duplicate submit for the same step.
+- `submit_response` used to mark the session `IN_PROGRESS` after queueing the resume, which could overwrite a status the engine had already moved on. If the resume reached the next delegate pause first, the session ended up showing `IN_PROGRESS` while it was actually waiting, and a client polling for input would wait forever. The pause is now claimed atomically before the resume is queued. A submit to a session that isn't waiting for input, such as one that has already completed, is now rejected instead of quietly reopening it.
 - A re-opened human review gate now only picks up review feedback recorded for its own step.
 
 All three were caught first in the hosted SPEAKMAN.AI platform and ported back here. The `submit_response` fix goes a step further than the hosted version, which still loses that next-pause race.
