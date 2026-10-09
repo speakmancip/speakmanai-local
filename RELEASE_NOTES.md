@@ -32,7 +32,7 @@ Downstream agents are now told which agent the update started from and what the 
 - `poll_workflow` now returns a `pause_id` in `input_required`, and `submit_response` takes it as an optional argument. With it, a response can only apply to the pause it was written for. Without it, a repeated or late submit could land on the *next* pause: in testing, a duplicate submit for one step was read as a review-gate response for the step after it. The argument is optional, so existing clients keep working, but the MCP instructions now tell clients to always pass it.
 - A re-opened human review gate now only picks up review feedback recorded for its own step.
 
-All three were caught first in the hosted SPEAKMAN.AI platform and ported back here. The `submit_response` fix goes a step further than the hosted version, which still loses that next-pause race.
+The Docker, status-write and review-gate fixes were caught first in the hosted SPEAKMAN.AI platform and ported back here. `pause_id` is new in this release, and together with the status-write change it closes a next-pause race the hosted version still has.
 
 ---
 
