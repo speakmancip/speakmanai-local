@@ -336,7 +336,9 @@ async def poll_workflow(session_id: str, mcp_ctx: Context) -> str:
 
     human_agents = await _build_human_exclusion_set(events, additional_exclusions)
     agent_index = _aggregate_agent_index(events, human_agents)
-    # completed_steps ordered by step index
+    # completed_steps ordered by each agent's most recent output, so agents re-run by an
+    # update_session cascade move to the end, reflecting what just ran
+    # rather than workflow step order.
     completed_steps = [
         aid for aid, _ in sorted(agent_index.items(), key=lambda x: x[1]["index"])
     ]
