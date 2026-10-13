@@ -9,6 +9,14 @@ from pathlib import Path
 
 block_cipher = None
 
+# Skills staged by `python tools/bundle_skills.py`. Optional: without it the exe still
+# builds, and the setup page says the skills are not included.
+skills_bundle = []
+if Path("build/skills_bundle/manifest.json").exists():
+    skills_bundle = [("build/skills_bundle", "skills_bundle")]
+else:
+    print("WARNING: build/skills_bundle not found - run `python tools/bundle_skills.py` first to include the skills.")
+
 a = Analysis(
     ["launcher.py"],
     pathex=["."],
@@ -22,7 +30,8 @@ a = Analysis(
         ("orchestration/mcp-server/database.py","orchestration/mcp-server"),
         ("orchestration/mcp-server/database_sqlite.py", "orchestration/mcp-server"),
         ("orchestration/mcp-server/document_renderer.py", "orchestration/mcp-server"),
-    ],
+        ("orchestration/mcp-server/skills_installer.py", "orchestration/mcp-server"),
+    ] + skills_bundle,
     hiddenimports=[
         # FastAPI / Starlette
         "uvicorn",
@@ -59,7 +68,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["motor", "pymongo", "server", "engine", "database", "database_sqlite"],
+    excludes=["motor", "pymongo", "server", "engine", "database", "database_sqlite", "skills_installer"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

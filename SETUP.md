@@ -200,10 +200,31 @@ source venv-desktop/Scripts/activate       # Git Bash
 
 pip install -r orchestration/mcp-server/requirements-desktop.txt
 
+python tools/bundle_skills.py              # stage the skills (see below)
 python -m PyInstaller speakmanai.spec
 ```
 
 Output: `dist/SpeakmanAI.exe`
+
+### Bundled skills
+
+The exe carries the SPEAKMAN.AI skills from the [speakmanai-cc](https://github.com/speakmancip/speakmanai-cc) repo, so a user does not need to clone that repo or run its install script.
+
+**At build time**, `tools/bundle_skills.py` reads a speakmanai-cc checkout and stages `build/skills_bundle`:
+
+- the Claude Code skills (`.claude/skills`) with their `prompts` and `templates`
+- the upload bundles for other assistants, built by that repo's `desktop-skills/build.ps1` (needs PowerShell; pass `--skip-zips` to leave them out)
+- `manifest.json` with the skills version (plugin version plus the checkout's commit) and a hash per file
+
+Point it at the checkout with `--cc-dir PATH` or `SPEAKMANAI_CC_DIR`. By default it looks for a `speakmanai-cc` folder beside this repo's grandparent. Build from a clean checkout: uncommitted changes mark the version `.dirty`. `speakmanai.spec` includes the bundle when it exists and warns when it does not.
+
+**At run time**, **Add to Claude Code** on the setup page registers the MCP server and installs the skills. It copies them to `~/.claude/skills` and the assets to `~/.claude/speakmanai-cc`, without prompting:
+
+- a file you have not changed since the last install is replaced
+- a file that differs from the last install (you edited it, or it came from `install.ps1`) is copied to `~/.claude/speakmanai-cc/backups/<timestamp>/` first, then replaced
+- your own skills, and extra files you added inside a skill folder, are left alone
+
+`~/.claude/speakmanai-cc/installed.json` records the installed version. The page shows whether the skills are installed, up to date, or have an update, and links the upload bundles for the Claude app and Copilot Studio. The speakmanai-cc `install.ps1` and `install.sh` still work for installing the skills without the exe.
 
 ### First run
 

@@ -27,11 +27,12 @@ if not getattr(sys, "_MEIPASS", None):
     load_dotenv()
 
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from mcp.server.fastmcp import FastMCP, Context
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
+import skills_installer
 from database import get_db, get_user_db, close as close_db
 from engine import (
     process_local_event,
@@ -1662,6 +1663,31 @@ async def setup_mcp_client(request: Request):
                              "message": f"Could not run the Claude Code CLI: {e}. Copy the command and run it in a terminal."})
 
 
+@app.get("/api/skills-status")
+async def skills_status():
+    return JSONResponse(await asyncio.to_thread(skills_installer.status))
+
+
+@app.post("/api/install-skills")
+async def install_skills():
+    """Copy the bundled skills into Claude Code (user level). Unattended; changed files are backed up."""
+    try:
+        result = await asyncio.to_thread(skills_installer.install)
+    except Exception as e:
+        log.warning(f"Skills install failed: {e}")
+        return JSONResponse({"ok": False, "message": f"Skills install failed: {e}"})
+    log.info(f"Skills install: {result.get('message')}")
+    return JSONResponse(result)
+
+
+@app.get("/downloads/skills/{name}")
+async def download_skills_bundle(name: str):
+    manifest = skills_installer.load_manifest() or {}
+    if name not in manifest.get("downloads", {}):
+        raise HTTPException(status_code=404, detail="Unknown download.")
+    return FileResponse(skills_installer.bundle_dir() / "downloads" / name, filename=name, media_type="application/zip")
+
+
 def _build_setup_html(cfg: dict) -> str:
     """Generate the setup page HTML."""
     provider       = cfg.get("llm_provider", "gemini")
@@ -1785,8 +1811,13 @@ def _build_setup_html(cfg: dict) -> str:
     <h2>Connect your AI Assistant</h2>
     <label class="field-label">Claude Code</label>
     <button class="btn btn-outline" onclick="connectClient('claude_code')">Add to Claude Code</button>
-    <div class="exec-hint">Registers this server for all your projects. If the button cannot find Claude Code, run this command in a terminal instead:</div>
+    <div class="exec-hint">Registers this server for all your projects and installs the skills. If the button cannot find Claude Code, run this command in a terminal instead:</div>
     <div class="copy-row"><code id="cc-cmd"></code><button class="btn btn-outline btn-copy" onclick="copyText('cc-cmd')">Copy</button></div>
+
+    <label class="field-label">Skills</label>
+    <div class="exec-hint" id="skills-status">Checking skills...</div>
+    <button class="btn btn-outline" id="skills-btn" onclick="installSkills()" style="display:none; margin-top:6px;">Install skills for Claude Code</button>
+    <div class="exec-hint" id="skills-downloads"></div>
 
     <label class="field-label">Other assistants (manual setup)</label>
     <div class="exec-hint">Add this MCP server URL in the assistant's own settings. The Claude app (Desktop and Cowork): add the server and upload the skills bundle by hand. Copilot Studio: use a public tunnel URL in place of localhost. Cursor and Codex: not tested.</div>
@@ -1922,8 +1953,60 @@ async function connectClient(name) {{
     body: JSON.stringify({{ client: name, port: MCP_PORT }})
   }});
   const d = await r.json();
-  showToast(d.message, !d.ok);
+  // The skills are useful even when registration has to be finished by hand.
+  const s = await postInstallSkills();
+  const skillsMsg = s.bundled === false ? '' : ' ' + s.message;
+  showToast(d.message + skillsMsg, !d.ok || s.ok === false && s.bundled !== false);
+  refreshSkillsStatus();
 }}
+
+async function postInstallSkills() {{
+  const st = await (await fetch('/api/skills-status')).json();
+  if (!st.bundled) return {{ ok: false, bundled: false, message: st.message }};
+  const r = await fetch('/api/install-skills', {{ method: 'POST' }});
+  return await r.json();
+}}
+
+async function installSkills() {{
+  const s = await postInstallSkills();
+  showToast(s.message, !s.ok);
+  refreshSkillsStatus();
+}}
+
+const SKILLS_STATE_TEXT = {{
+  not_installed:    'Not installed.',
+  up_to_date:       'Installed and up to date.',
+  update_available: 'An update is available.',
+}};
+
+async function refreshSkillsStatus() {{
+  const el = document.getElementById('skills-status');
+  const btn = document.getElementById('skills-btn');
+  const dl = document.getElementById('skills-downloads');
+  let st;
+  try {{ st = await (await fetch('/api/skills-status')).json(); }} catch (e) {{ el.textContent = 'Could not read skills status.'; return; }}
+  if (!st.bundled) {{ el.textContent = st.message; btn.style.display = 'none'; dl.textContent = ''; return; }}
+  let text = st.skills + ' skills bundled (version ' + st.bundled_version + '). ' + (SKILLS_STATE_TEXT[st.state] || '');
+  if (st.installed_version && st.state !== 'up_to_date') text += ' Installed version: ' + st.installed_version + '.';
+  if (st.counts.modified) text += ' ' + st.counts.modified + ' installed files differ from the last install and will be backed up before they are replaced.';
+  if (!st.claude_code_detected) text += ' Claude Code was not detected on this machine.';
+  el.textContent = text;
+  btn.style.display = st.state === 'up_to_date' ? 'none' : 'inline-flex';
+  btn.textContent = st.state === 'not_installed' ? 'Install skills for Claude Code' : 'Update skills for Claude Code';
+  dl.textContent = '';
+  if (st.downloads.length) {{
+    dl.appendChild(document.createTextNode('Bundles to upload by hand in other assistants: '));
+    st.downloads.forEach((name, i) => {{
+      const a = document.createElement('a');
+      a.href = '/downloads/skills/' + encodeURIComponent(name);
+      a.textContent = name;
+      a.style.color = '#00ff7f';
+      dl.appendChild(a);
+      if (i < st.downloads.length - 1) dl.appendChild(document.createTextNode(', '));
+    }});
+  }}
+}}
+refreshSkillsStatus();
 
 const MCP_PORT = Number(location.port) || 8000;
 const MCP_URL = 'http://localhost:' + MCP_PORT + '/mcp';

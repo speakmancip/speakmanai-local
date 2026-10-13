@@ -207,6 +207,7 @@ speakmanai-local/
     ├── engine.py                        # Workflow execution engine
     ├── database.py                      # Database router (SQLite / MongoDB)
     ├── database_sqlite.py               # SQLite async adapter
+    ├── skills_installer.py              # Installs the bundled skills into Claude Code
     ├── requirements.txt                 # Docker/server dependencies
     └── requirements-desktop.txt        # Desktop exe dependencies
 ```
@@ -221,10 +222,13 @@ source venv-desktop/Scripts/activate    # Git Bash / Mac/Linux
 # venv-desktop\Scripts\activate.bat    # Windows CMD
 
 pip install -r orchestration/mcp-server/requirements-desktop.txt
+python tools/bundle_skills.py           # stage the skills from a speakmanai-cc checkout
 python -m PyInstaller speakmanai.spec
 ```
 
 Output: `dist/SpeakmanAI.exe`
+
+`tools/bundle_skills.py` reads a checkout of [speakmanai-cc](https://github.com/speakmancip/speakmanai-cc) (`--cc-dir`, or `SPEAKMANAI_CC_DIR`, default a sibling folder) and stages the skills into `build/skills_bundle`. The exe then carries them: **Add to Claude Code** on the setup page installs them, and the page offers the upload bundles for other assistants. Skip the step and the exe still builds, without skills. See [SETUP.md](SETUP.md).
 
 ---
 
