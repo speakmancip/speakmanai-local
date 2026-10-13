@@ -21,10 +21,10 @@ def _extract_json(text: str):
         raise
 
 # Max output tokens per Anthropic model; models not listed get the 64000 default in _call_llm.
-# Haiku 4.5 allows 64K output (200K context). The old 8192 cap was carried over from older
-# Haiku models and truncated every fast-tier response.
+# Haiku 5.5 allows 128K output (1M context). The old 8192 cap, carried over from older Haiku
+# models, truncated every fast-tier response.
 _ANTHROPIC_MAX_TOKENS: dict[str, int] = {
-    "claude-haiku-4-5-20251001": 64000,
+    "claude-haiku-5-5": 128000,
 }
 
 # ─────────────────────────────────────────────
@@ -61,8 +61,8 @@ OLLAMA_FALLBACK_MODEL = os.environ.get("OLLAMA_FALLBACK_MODEL", "llama3")
 MODEL_TIERS = {
     "gemini":    {"fast": "gemini-3.5-flash-lite", "standard": "gemini-3.8-flash", "advanced": "gemini-3.1-pro-preview"},
     "vertexai":  {"fast": "gemini-3.5-flash-lite", "standard": "gemini-3.8-flash", "advanced": "gemini-3.1-pro-preview"},
-    "anthropic": {"fast": "claude-haiku-4-5-20251001", "standard": "claude-sonnet-4-6", "advanced": "claude-opus-4-8"},
-    "openai":    {"fast": "gpt-4o-mini",       "standard": "gpt-4o",           "advanced": "gpt-4o"},
+    "anthropic": {"fast": "claude-haiku-5-5", "standard": "claude-sonnet-5-5", "advanced": "claude-opus-5-5"},
+    "openai":    {"fast": "gpt-6-luna",       "standard": "gpt-6.1-sol",       "advanced": "gpt-6-astra"},
     "ollama":    {"fast": None,                 "standard": None,               "advanced": None},
 }
 
@@ -71,9 +71,10 @@ _MODEL_TO_TIER = {
     "gemini-3.1-pro-preview": "advanced", "gemini-3.8-flash": "standard",
     "gemini-3-flash-preview": "standard",
     "gemini-3.5-flash-lite": "fast", "gemini-3.1-flash-lite": "fast",
+    "claude-opus-5-5": "advanced",  "claude-sonnet-5-5": "standard", "claude-haiku-5-5": "fast",
     "claude-opus-4-8": "advanced",  "claude-sonnet-4-6": "standard",
-    "claude-haiku-4-5-20251001": "fast",
     "claude-sonnet-5": "standard",  "claude-fable-5": "advanced",
+    "gpt-6-astra": "advanced",      "gpt-6.1-sol": "standard",  "gpt-6-luna": "fast",
     "gpt-4o": "standard",           "gpt-4o-mini": "fast",
     "o1": "advanced",               "o3-mini": "fast",
 }

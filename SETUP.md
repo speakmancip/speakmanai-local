@@ -40,9 +40,9 @@ RAW_EVENTS_DB_NAME=speakmanai_db
 
 LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
-DEFAULT_MODEL=claude-haiku-4-5-20251001
-STANDARD_MODEL=claude-sonnet-4-6
-ADVANCED_MODEL=claude-opus-4-8
+DEFAULT_MODEL=claude-haiku-5-5
+STANDARD_MODEL=claude-sonnet-5-5
+ADVANCED_MODEL=claude-opus-5-5
 ```
 
 **OpenAI**
@@ -53,9 +53,9 @@ RAW_EVENTS_DB_NAME=speakmanai_db
 
 LLM_PROVIDER=openai
 OPENAI_API_KEY=sk-...
-DEFAULT_MODEL=gpt-4o-mini
-STANDARD_MODEL=gpt-4o
-ADVANCED_MODEL=gpt-4o
+DEFAULT_MODEL=gpt-6-luna
+STANDARD_MODEL=gpt-6.1-sol
+ADVANCED_MODEL=gpt-6-astra
 ```
 
 **Ollama**
@@ -238,8 +238,8 @@ Use it to:
 | Provider | `LLM_PROVIDER` | Key variable | Fast (`DEFAULT_MODEL`) | Standard (`STANDARD_MODEL`) | Advanced (`ADVANCED_MODEL`) |
 |---|---|---|---|---|---|
 | Gemini | `gemini` | `GEMINI_API_KEY` | `gemini-3.5-flash-lite` | `gemini-3.8-flash` | `gemini-3.1-pro-preview` |
-| Claude | `anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-4-5-20251001` | `claude-sonnet-4-6` | `claude-opus-4-8` |
-| OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-4o-mini` | `gpt-4o` | `gpt-4o` |
+| Claude | `anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-5-5` | `claude-sonnet-5-5` | `claude-opus-5-5` |
+| OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-6-luna` | `gpt-6.1-sol` | `gpt-6-astra` |
 | Ollama | `ollama` | *(none)* | set via `DEFAULT_MODEL` | set via `STANDARD_MODEL` | set via `ADVANCED_MODEL` |
 | Vertex AI | `vertexai` | `GCP_PROJECT_ID` + `GCP_REGION` | `gemini-3.5-flash-lite` | `gemini-3.8-flash` | `gemini-3.1-pro-preview` |
 
@@ -258,7 +258,7 @@ All workflow agents use abstract tiers (`fast`, `standard`, `advanced`) rather t
 `DEFAULT_MODEL`, `STANDARD_MODEL`, and `ADVANCED_MODEL` accept any model name your provider account has access to — you are not limited to the table above. Newer, more capable models are also supported and selectable on the setup page for Gemini and Claude:
 
 - **Gemini 3 family** — e.g. `gemini-3.1-flash-lite` (GA as of May 2026 — note: no `-preview` suffix, that alias has been retired), `gemini-3-flash-preview`, `gemini-3.1-pro-preview` (Vertex AI: global location only)
-- **Claude 5 family** — `claude-sonnet-5`, `claude-fable-5`
+- **Earlier Claude and OpenAI models** — `claude-sonnet-4-6`, `claude-opus-4-8`, `claude-sonnet-5`, `claude-fable-5`, `gpt-4o`, `gpt-4o-mini` stay selectable on the setup page for Claude and OpenAI
 
 These generally improve output quality but cost more per call than the defaults above — use them for `STANDARD_MODEL` / `ADVANCED_MODEL` on workflows where the extra quality is worth the spend. Preview model names change as Google/Anthropic promote them to general availability — if you get a 404/"model not found" on one of these, check whether the `-preview` suffix has been dropped.
 

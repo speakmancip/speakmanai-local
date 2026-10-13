@@ -381,3 +381,13 @@ Swept every skill in `speakmanai-cc` for references to `RE_DOMAIN_MODELER_V1` / 
 **Verified:** scratch test with `TestClient` and a temp home/SQLite: page default `auto`; POST `force_delegate` updates the row the engine reads and the page; a `set_execution_mode` change shows on the page; a bad value returns 400 and changes nothing; a POST without `execution_mode` leaves it alone. Not yet re-run live in the rebuilt exe.
 
 **Known, not fixed:** `engine.py` still uses the startup-time `DEFAULT_MODEL` alias where an agent has no `model` (planner, process step, validator, `generate_document`), so a runtime provider switch could send the old provider's model name to the new provider. `LLM_PROVIDER` is stale in two log lines.
+
+## CHANGED (2026-10-13): Claude 5.5 and GPT-6 tier defaults, Haiku output cap removed
+
+**What:** per-provider defaults are now Claude `claude-haiku-5-5` / `claude-sonnet-5-5` / `claude-opus-5-5` and OpenAI `gpt-6-luna` / `gpt-6.1-sol` / `gpt-6-astra` (fast / standard / advanced). Gemini and Vertex AI defaults are unchanged (`gemini-3.5-flash-lite` / `gemini-3.8-flash` / `gemini-3.1-pro-preview`). Touches `engine.py` (`MODEL_TIERS`, `_MODEL_TO_TIER`, `_ANTHROPIC_MAX_TOKENS`), `server.py` (setup page `MODELS` dropdowns, dead `_PROVIDER_MODELS`), `README.md`, `SETUP.md`. Older Claude and GPT-4o models stay selectable on the setup page; `claude-haiku-4-5-20251001` and the undated `claude-haiku-4-5` are removed everywhere.
+
+**Output cap:** `_ANTHROPIC_MAX_TOKENS` held a stale 8192 limit for Haiku (carried over from older Haiku models), which truncated every fast-tier Anthropic response. `claude-haiku-5-5` now has an explicit 128000 (1M context); other Anthropic models use the 64000 default in `_call_llm`.
+
+**List prices supplied with the change, USD per million tokens, input / output** (a snapshot, not read from any API): Opus 5.5 4.00 / 20.00; Sonnet 5.5 2.00 / 10.00; Haiku 5.5 0.10 / 0.50 ("from" prices); Gemini 3.1 Pro 2.00 / 12.00; Gemini 3.8 Flash 0.75 / 3.75; Gemini 3.5 Flash-Lite 0.30 / 2.50; gpt-6-astra 10.00 / 50.00; gpt-6.1-sol 2.00 / 10.00; gpt-6-luna 0.10 / 0.50.
+
+**Not covered:** saved configs that pin an old model keep using it (the engine passes an unknown pinned name through), so existing Claude and OpenAI users only move to the new defaults when they re-save on the setup page; only Gemini 2.x has a startup migration (`launcher.py`). Whether the GPT-6 models accept a `temperature` parameter is unconfirmed (`_call_llm` sends one to OpenAI). Output limits for Opus 5.5 and Sonnet 5.5 were not supplied, so they use the 64000 default.
