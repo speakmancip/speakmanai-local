@@ -8,6 +8,8 @@ import os
 import re
 import sys
 import json
+import shutil
+import subprocess
 import logging
 import uuid
 import httpx
@@ -1485,11 +1487,33 @@ _PROVIDER_MODELS = {
     "ollama":    {"fast": "",                       "standard": "",                  "advanced": ""},
 }
 
-_MCP_CLIENT_PATHS = {
-    "claude_desktop": Path(os.environ.get("APPDATA", "")) / "Claude" / "claude_desktop_config.json",
-    "claude_code":    Path.home() / ".claude" / "settings.json",
-    "cursor":         Path.home() / ".cursor" / "mcp.json",
-}
+_MCP_SERVER_NAME = "speakmanai"
+
+
+def _find_claude_cli() -> str | None:
+    """Locate the Claude Code CLI. The exe may be started with a shorter PATH than the user's
+    shell, so also check the native installer's default location."""
+    found = shutil.which("claude")
+    if found:
+        return found
+    for candidate in (Path.home() / ".local" / "bin" / "claude.exe", Path.home() / ".local" / "bin" / "claude"):
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _claude_mcp_add_args(url: str) -> list[str]:
+    # User scope: one registration covers every project. Claude Code keeps MCP servers in
+    # ~/.claude.json and owns that file, so register through its CLI rather than editing JSON.
+    return ["mcp", "add", "--transport", "http", "--scope", "user", _MCP_SERVER_NAME, url]
+
+
+def _run_claude(cli: str, args: list[str]) -> tuple[int, str]:
+    proc = subprocess.run(
+        [cli, *args], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return proc.returncode, ((proc.stdout or "") + (proc.stderr or "")).strip()
 
 
 def _read_config() -> dict:
@@ -1604,34 +1628,38 @@ async def check_ollama():
 @app.post("/api/setup-mcp-client")
 async def setup_mcp_client(request: Request):
     body = await request.json()
-    client_name = body.get("client")  # "claude_desktop" | "claude_code" | "cursor"
-    port = body.get("port", 8000)
-
-    config_path = _MCP_CLIENT_PATHS.get(client_name)
-    if not config_path:
+    client_name = body.get("client")
+    # Only Claude Code can be registered automatically. Other clients are set up by hand
+    # from the MCP URL shown on the setup page.
+    if client_name != "claude_code":
         raise HTTPException(status_code=400, detail=f"Unknown client: {client_name}")
 
-    if not config_path.parent.exists():
-        return JSONResponse({"ok": False, "message": f"{client_name} not detected (directory missing)."})
+    port = body.get("port") or request.url.port or 8000
+    url = f"http://localhost:{port}/mcp"
+    add_args = _claude_mcp_add_args(url)
+    command = "claude " + " ".join(add_args)
 
-    entry = {"url": f"http://localhost:{port}/mcp"}
+    cli = _find_claude_cli()
+    if not cli:
+        return JSONResponse({"ok": False, "command": command,
+                             "message": "Claude Code CLI not found. Copy the command and run it in a terminal."})
 
     try:
-        existing: dict = {}
-        if config_path.exists():
-            try:
-                existing = json.loads(config_path.read_text(encoding="utf-8"))
-            except Exception:
-                existing = {}
-
-        mcp_servers = existing.get("mcpServers", {})
-        mcp_servers["speakmanai"] = entry
-        existing["mcpServers"] = mcp_servers
-
-        config_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
-        return JSONResponse({"ok": True, "message": f"Added to {client_name}. Restart the client to activate."})
+        code, out = await asyncio.to_thread(_run_claude, cli, add_args)
+        if code != 0 and "already exists" in out.lower():
+            # Re-register so a changed port takes effect.
+            await asyncio.to_thread(_run_claude, cli, ["mcp", "remove", "--scope", "user", _MCP_SERVER_NAME])
+            code, out = await asyncio.to_thread(_run_claude, cli, add_args)
+        if code != 0:
+            log.warning(f"claude mcp add failed ({code}): {out}")
+            return JSONResponse({"ok": False, "command": command,
+                                 "message": f"Claude Code did not accept the registration: {out[:200] or 'no output'}"})
+        return JSONResponse({"ok": True, "command": command,
+                             "message": "Added to Claude Code for all projects. Restart Claude Code to activate."})
     except Exception as e:
-        return JSONResponse({"ok": False, "message": str(e)})
+        log.warning(f"claude mcp add could not run: {e}")
+        return JSONResponse({"ok": False, "command": command,
+                             "message": f"Could not run the Claude Code CLI: {e}. Copy the command and run it in a terminal."})
 
 
 def _build_setup_html(cfg: dict) -> str:
@@ -1673,7 +1701,9 @@ def _build_setup_html(cfg: dict) -> str:
   .btn-primary:hover {{ background: #00e070; box-shadow: 0 0 16px rgba(0,255,127,0.3); }}
   .btn-outline {{ background: transparent; border: 2px solid #1e293b; color: #94a3b8; }}
   .btn-outline:hover {{ border-color: #00ff7f; color: #00ff7f; background: #021a0d; }}
-  .connect-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }}
+  .copy-row {{ display: flex; align-items: center; gap: 8px; margin-top: 6px; }}
+  .copy-row code {{ flex: 1; background: #0a0f1a; border: 1px solid #1e293b; border-radius: 8px; padding: 8px 12px; font-size: 0.75rem; color: #94a3b8; overflow-x: auto; white-space: nowrap; }}
+  .btn-copy {{ padding: 6px 12px; font-size: 0.75rem; }}
   .status-dot {{ width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: #ef4444; }}
   .status-dot.up {{ background: #00ff7f; }}
   .warning {{ background: #1a0f00; border: 1px solid #78350f; border-radius: 6px; padding: 10px 12px; font-size: 0.8rem; color: #fbbf24; margin-top: 8px; }}
@@ -1753,11 +1783,14 @@ def _build_setup_html(cfg: dict) -> str:
 
   <div class="section">
     <h2>Connect your AI Assistant</h2>
-    <div class="connect-grid">
-      <button class="btn btn-outline" onclick="connectClient('claude_desktop')">Claude Desktop</button>
-      <button class="btn btn-outline" onclick="connectClient('claude_code')">Claude Code</button>
-      <button class="btn btn-outline" onclick="connectClient('cursor')">Cursor</button>
-    </div>
+    <label class="field-label">Claude Code</label>
+    <button class="btn btn-outline" onclick="connectClient('claude_code')">Add to Claude Code</button>
+    <div class="exec-hint">Registers this server for all your projects. If the button cannot find Claude Code, run this command in a terminal instead:</div>
+    <div class="copy-row"><code id="cc-cmd"></code><button class="btn btn-outline btn-copy" onclick="copyText('cc-cmd')">Copy</button></div>
+
+    <label class="field-label">Other assistants (manual setup)</label>
+    <div class="exec-hint">Add this MCP server URL in the assistant's own settings. The Claude app (Desktop and Cowork): add the server and upload the skills bundle by hand. Copilot Studio: use a public tunnel URL in place of localhost. Cursor and Codex: not tested.</div>
+    <div class="copy-row"><code id="mcp-url"></code><button class="btn btn-outline btn-copy" onclick="copyText('mcp-url')">Copy</button></div>
   </div>
 </div>
 
@@ -1886,10 +1919,25 @@ async function connectClient(name) {{
   const r = await fetch('/api/setup-mcp-client', {{
     method: 'POST',
     headers: {{'Content-Type':'application/json'}},
-    body: JSON.stringify({{ client: name }})
+    body: JSON.stringify({{ client: name, port: MCP_PORT }})
   }});
   const d = await r.json();
   showToast(d.message, !d.ok);
+}}
+
+const MCP_PORT = Number(location.port) || 8000;
+const MCP_URL = 'http://localhost:' + MCP_PORT + '/mcp';
+document.getElementById('mcp-url').textContent = MCP_URL;
+document.getElementById('cc-cmd').textContent = 'claude mcp add --transport http --scope user {_MCP_SERVER_NAME} ' + MCP_URL;
+
+async function copyText(id) {{
+  const text = document.getElementById(id).textContent;
+  try {{
+    await navigator.clipboard.writeText(text);
+    showToast('Copied');
+  }} catch (e) {{
+    showToast('Copy failed. Select the text and copy it manually.', true);
+  }}
 }}
 
 function showToast(msg, isError=false) {{

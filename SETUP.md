@@ -111,19 +111,21 @@ import_architecture_plan('<contents of WorkflowsAndAgents/CLAUDE_WORKFLOW_CREATO
 
 ### 4. Connect your AI assistant
 
-Add to `~/.claude/settings.json` (Claude Code):
+**Claude Code.** Register the server once for all your projects:
 
-```json
-{
-  "mcpServers": {
-    "speakmanai": {
-      "url": "http://localhost:8000/mcp"
-    }
-  }
-}
+```bash
+claude mcp add --transport http --scope user speakmanai http://localhost:8000/mcp
 ```
 
-Restart your AI assistant after saving. The setup page at `http://localhost:8000/setup` provides one-click config buttons for Claude Desktop, Claude Code, and Cursor.
+The setup page at `http://localhost:8000/setup` has an **Add to Claude Code** button that runs this for you, and shows the command to copy if it cannot find the `claude` CLI. Restart Claude Code afterwards, then check with `claude mcp list`.
+
+> Earlier versions wrote the server into `~/.claude/settings.json`. Claude Code does not read MCP servers from that file, so that entry never took effect. It keeps them in `~/.claude.json`, which the command above updates.
+
+**Other assistants.** Setup is manual. Add the MCP server URL `http://localhost:8000/mcp` in the assistant's own settings (the setup page shows it with a copy button).
+
+- The Claude app (Desktop and Cowork): add the server by hand and upload the skills bundle by hand.
+- Microsoft Copilot Studio: it cannot reach `localhost`, so use a public tunnel URL. See `desktop-skills/COPILOT_STUDIO.md` in the `speakmanai-cc` repo.
+- Cursor and Codex: not tested.
 
 ---
 
@@ -221,7 +223,7 @@ Use it to:
 - Pick your AI provider (Gemini, Claude, OpenAI, Vertex AI, Ollama)
 - Enter your API key (or GCP project/region for Vertex AI, which uses Application Default Credentials instead) and choose fast / standard / advanced models
 - Set the execution mode
-- Connect your AI assistant (Claude Desktop, Claude Code, Cursor)
+- Connect your AI assistant (one click for Claude Code; a copyable MCP URL for the others)
 
 ### Execution Modes
 
