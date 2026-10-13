@@ -94,7 +94,7 @@ The delegate-first sibling of the workflow builder above. Produces workflows whe
 | Provider | Fast | Standard | Advanced |
 |---|---|---|---|
 | **Gemini** (recommended) | `gemini-3.5-flash-lite` | `gemini-3.8-flash` | `gemini-3.1-pro-preview` |
-| **Claude** | `claude-haiku-4-5` | `claude-sonnet-4-6` | `claude-opus-4-8` |
+| **Claude** | `claude-haiku-4-5-20251001` | `claude-sonnet-4-6` | `claude-opus-4-8` |
 | **OpenAI** | `gpt-4o-mini` | `gpt-4o` | `gpt-4o` |
 | **Ollama** | Local inference — 14B+ model strongly recommended (see below) | | |
 

@@ -20,10 +20,12 @@ def _extract_json(text: str):
             return json.loads(text[:e.pos])
         raise
 
-# Max output tokens per Anthropic model, for models whose API limit is below the 64000 default
-# used in _call_llm. Empty on purpose: Haiku 4.5 (claude-haiku-4-5-20251001) allows 64K output,
-# so the old 8192 cap (carried over from older Haiku models) only truncated fast-tier outputs.
-_ANTHROPIC_MAX_TOKENS: dict[str, int] = {}
+# Max output tokens per Anthropic model; models not listed get the 64000 default in _call_llm.
+# Haiku 4.5 allows 64K output (200K context). The old 8192 cap was carried over from older
+# Haiku models and truncated every fast-tier response.
+_ANTHROPIC_MAX_TOKENS: dict[str, int] = {
+    "claude-haiku-4-5-20251001": 64000,
+}
 
 # ─────────────────────────────────────────────
 # LLM Provider Configuration — read dynamically from os.environ at call time
@@ -70,7 +72,7 @@ _MODEL_TO_TIER = {
     "gemini-3-flash-preview": "standard",
     "gemini-3.5-flash-lite": "fast", "gemini-3.1-flash-lite": "fast",
     "claude-opus-4-8": "advanced",  "claude-sonnet-4-6": "standard",
-    "claude-haiku-4-5-20251001": "fast", "claude-haiku-4-5": "fast",
+    "claude-haiku-4-5-20251001": "fast",
     "claude-sonnet-5": "standard",  "claude-fable-5": "advanced",
     "gpt-4o": "standard",           "gpt-4o-mini": "fast",
     "o1": "advanced",               "o3-mini": "fast",

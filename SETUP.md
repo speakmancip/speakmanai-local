@@ -40,7 +40,7 @@ RAW_EVENTS_DB_NAME=speakmanai_db
 
 LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
-DEFAULT_MODEL=claude-haiku-4-5
+DEFAULT_MODEL=claude-haiku-4-5-20251001
 STANDARD_MODEL=claude-sonnet-4-6
 ADVANCED_MODEL=claude-opus-4-8
 ```
@@ -238,7 +238,7 @@ Use it to:
 | Provider | `LLM_PROVIDER` | Key variable | Fast (`DEFAULT_MODEL`) | Standard (`STANDARD_MODEL`) | Advanced (`ADVANCED_MODEL`) |
 |---|---|---|---|---|---|
 | Gemini | `gemini` | `GEMINI_API_KEY` | `gemini-3.5-flash-lite` | `gemini-3.8-flash` | `gemini-3.1-pro-preview` |
-| Claude | `anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` | `claude-sonnet-4-6` | `claude-opus-4-8` |
+| Claude | `anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-4-5-20251001` | `claude-sonnet-4-6` | `claude-opus-4-8` |
 | OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-4o-mini` | `gpt-4o` | `gpt-4o` |
 | Ollama | `ollama` | *(none)* | set via `DEFAULT_MODEL` | set via `STANDARD_MODEL` | set via `ADVANCED_MODEL` |
 | Vertex AI | `vertexai` | `GCP_PROJECT_ID` + `GCP_REGION` | `gemini-3.5-flash-lite` | `gemini-3.8-flash` | `gemini-3.1-pro-preview` |
