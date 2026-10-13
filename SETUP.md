@@ -315,7 +315,7 @@ Ensure you started with `--profile mongo`. Without it the MongoDB container does
 The `extra_hosts: host.docker.internal:host-gateway` entry in `docker-compose.yml` handles this on Linux. On Mac and Windows, `host.docker.internal` resolves automatically.
 
 **No API credits / want to test without LLM costs**
-Use Force Delegate mode — your connected AI assistant (Claude Code) executes all AI steps instead of calling the LLM API. Set it in the setup page or call `set_execution_mode("force_delegate")` via MCP.
+Use Force Delegate mode — your connected AI assistant (Claude Code) executes all AI steps instead of calling the LLM API. Set it in the setup page or call `set_execution_mode("force_delegate")` via MCP. Validators are not delegated: with no model API configured they auto-pass, and the run record carries a `validation_skipped` marker for each skipped step.
 
 **Desktop exe logs**
 If the exe starts but something isn't working, check `~/.speakmanai/speakmanai.log` for details.

@@ -361,3 +361,13 @@ Swept every skill in `speakmanai-cc` for references to `RE_DOMAIN_MODELER_V1` / 
 **Related gap, not fixed here:** `seed_if_empty` only imports workflows missing from the DB, by design (protects hand edits via `import_agent`). So prompt fixes, including v1.3.0's Requirements Engineering improvements and this one, never reach existing installs. The release notes tell upgraders how to re-import. A version-aware reseed (record the file version each workflow came from, update agents the user hasn't edited) would close it properly.
 
 **Owner's local DB synced 2026-10-09:** all 8 shipped files re-imported through the server's own `import_workflow`/`import_agent` (exe stopped, DB backed up first). Three stale agents (`RE_USE_CASE_ANALYST_V1`, `RE_USE_CASE_VALIDATOR_V1`, `MCP_BA_VAL_LOOP_V1`) had been running pre-v1.3.0 prompts. `MCP_TECHNICAL_WRITER_V2`, removed from the shipped Solution Architecture file back in v1.1.0 (`8755eab`) but still linked locally, was deleted at the owner's request.
+
+## CHANGED (2026-10-13): AI validators auto-pass when no model API is configured
+
+**Why:** a delegate-only run (no API key, `force_delegate`) still sent every validated step to the engine's own model. The call failed, was scored 0, and bounced the delegate through up to `maxLoops` redos (default 3) with the error text shown as "validator feedback", before advancing anyway. Validators are deliberately not delegated: that would ask the delegate to validate its own output.
+
+**What:** `_model_configured()` (`engine.py`) checks configuration only, never reachability: Anthropic/OpenAI need their key, Gemini needs a key or `GCP_PROJECT_ID`, Ollama always counts as configured. `_handle_validate_step` calls it for the validator's resolved model. If nothing is configured, the step auto-passes straight to the HITL gate / advance, and a `VALIDATION` event with `validation_skipped: "true"` is logged so the record shows the step was not validated. `VALIDATION` events are already filtered out of every output scan and never change session status.
+
+**Not changed:** a configured provider that is down still fails validation visibly and retries as before. HITL gates are untouched and still need a person.
+
+**Verified:** scratch test against a SQLite session: no key gives one `validation_skipped` event, zero retries, and the next step queued; with a key and a failing provider the retry path is unchanged (re-pause, one `validation_retry`). No automated test suite exists in this repo. **Enterprise:** has real model access in all deployments, so this is lite-only unless BYO-key tenants with no key become a case.

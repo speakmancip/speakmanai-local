@@ -298,6 +298,22 @@ async def _call_llm(system_prompt: str, user_content: str, model_name: str, mime
 
     return result_text
 
+def _model_configured(model_name: str) -> bool:
+    """True if the engine has what it needs to attempt a model call for model_name.
+
+    Checks configuration only, never reachability: a configured provider that is down should
+    still fail visibly. Ollama counts as configured because it needs no credentials."""
+    cfg = _cfg()
+    provider, _ = _resolve_model(model_name)
+    if provider == "anthropic":
+        return bool(cfg["anthropic_key"])
+    if provider == "openai":
+        return bool(cfg["openai_key"])
+    if provider == "ollama":
+        return True
+    return bool(cfg["gemini_key"] or cfg["gcp_project"])
+
+
 async def _log_event_to_db(session_id: str, event: dict, db):
     """
     Appends events to the session and promotes top-level fields (status, title, owner)
@@ -1277,6 +1293,22 @@ async def _handle_validate_step(event: dict, queue: asyncio.Queue):
     if not validator_config:
         log.warning(f"[{session_id}] Validator {validator_agent_id} not found. Auto-passing.")
         score, feedback, max_loops, min_score, val_output = 10, "Validator not found.", 0, 0.0, "Validator not found."
+    elif not _model_configured(validator_config.get("model", DEFAULT_MODEL)):
+        # No model API is configured, so the validator cannot run. It is deliberately not
+        # delegated to the connected tool: that would ask the delegate to validate its own
+        # output. Pass the step through and leave a VALIDATION marker so the run record shows
+        # it was not validated. (VALIDATION events are filtered out of every output scan.)
+        log.warning(f"[{session_id}] No model API configured. Skipping validator {validator_agent_id} for {agent_id} (auto-pass).")
+        score, feedback, max_loops, min_score, val_output = 10, "Validation skipped: no model API configured.", 0, 0.0, "Validation skipped."
+        await _log_event_to_db(session_id, {
+            "event_id": str(uuid.uuid4()),
+            "publish_time": datetime.now(timezone.utc).isoformat(),
+            "attributes": {
+                "session_id": session_id, "owner_id": "local_user", "event_type": "VALIDATION",
+                "validation_skipped": "true", "agent_id": agent_id, "validator_agent_id": validator_agent_id,
+            },
+            "data": {"reason": "no model API configured"},
+        }, db)
     else:
         val_config = validator_config.get("validationConfig", {})
         max_loops = int(val_config.get("maxLoops", 3))
