@@ -20,11 +20,10 @@ def _extract_json(text: str):
             return json.loads(text[:e.pos])
         raise
 
-# Max output tokens per Anthropic model — Haiku is capped at 8192 by the API.
-_ANTHROPIC_MAX_TOKENS: dict[str, int] = {
-    "claude-haiku-4-5-20251001": 8192,
-    "claude-haiku-4-5":          8192,
-}
+# Max output tokens per Anthropic model, for models whose API limit is below the 64000 default
+# used in _call_llm. Empty on purpose: Haiku 4.5 (claude-haiku-4-5-20251001) allows 64K output,
+# so the old 8192 cap (carried over from older Haiku models) only truncated fast-tier outputs.
+_ANTHROPIC_MAX_TOKENS: dict[str, int] = {}
 
 # ─────────────────────────────────────────────
 # LLM Provider Configuration — read dynamically from os.environ at call time
