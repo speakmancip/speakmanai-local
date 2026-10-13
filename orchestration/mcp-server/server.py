@@ -1530,10 +1530,23 @@ def _apply_config_to_env(cfg: dict) -> None:
             os.environ.pop(env_key, None)
 
 
+_EXECUTION_MODES = ("auto", "force_delegate", "force_background")
+
+
+async def _get_execution_mode() -> str:
+    """The engine's effective execution mode: the global_config row in the settings collection."""
+    settings = await get_db()["settings"].find_one({"_id": "global_config"}) or {}
+    mode = settings.get("execution_mode", "auto")
+    return mode if mode in _EXECUTION_MODES else "auto"
+
+
 @app.get("/setup", response_class=HTMLResponse)
 async def setup_page():
     """Self-contained onboarding page — no external JS/CSS dependencies."""
     cfg = _read_config()
+    # The engine reads the execution mode from the database (also written by the
+    # set_execution_mode tool), so show that value rather than whatever config.json holds.
+    cfg["execution_mode"] = await _get_execution_mode()
     return HTMLResponse(
         _build_setup_html(cfg),
         headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
@@ -1553,10 +1566,18 @@ async def get_config():
 @app.post("/api/config")
 async def post_config(request: Request):
     body = await request.json()
+    mode = body.get("execution_mode")
+    if mode is not None and mode not in _EXECUTION_MODES:
+        return JSONResponse({"ok": False, "message": f"Invalid execution_mode: {mode!r}."}, status_code=400)
     cfg = _read_config()
     cfg.update({k: v for k, v in body.items() if v is not None})
     _write_config(cfg)
     _apply_config_to_env(cfg)
+    if mode is not None:
+        # The engine reads the mode from the database, not from config.json or the environment.
+        await get_db()["settings"].update_one(
+            {"_id": "global_config"}, {"$set": {"execution_mode": mode}}, upsert=True
+        )
     return JSONResponse({"ok": True, "message": "Configuration saved."})
 
 
@@ -1616,6 +1637,9 @@ async def setup_mcp_client(request: Request):
 def _build_setup_html(cfg: dict) -> str:
     """Generate the setup page HTML."""
     provider       = cfg.get("llm_provider", "gemini")
+    saved_exec     = cfg.get("execution_mode", "auto")
+    if saved_exec not in _EXECUTION_MODES:
+        saved_exec = "auto"
     saved_fast     = cfg.get("default_model", "")
     saved_standard = cfg.get("standard_model", "")
     saved_advanced = cfg.get("advanced_model", "")
@@ -1875,6 +1899,7 @@ function showToast(msg, isError=false) {{
 
 // Initialise on load
 setProvider(currentProvider);
+document.getElementById('exec-mode').value = '{saved_exec}';
 updateExecHint();
 </script>
 </body>

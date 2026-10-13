@@ -371,3 +371,13 @@ Swept every skill in `speakmanai-cc` for references to `RE_DOMAIN_MODELER_V1` / 
 **Not changed:** a configured provider that is down still fails validation visibly and retries as before. HITL gates are untouched and still need a person.
 
 **Verified:** scratch test against a SQLite session: no key gives one `validation_skipped` event, zero retries, and the next step queued; with a key and a failing provider the retry path is unchanged (re-pause, one `validation_retry`). No automated test suite exists in this repo. **Enterprise:** has real model access in all deployments, so this is lite-only unless BYO-key tenants with no key become a case.
+
+## FIXED (2026-10-13): setup page Execution Mode never reached the engine
+
+**Found by:** a delegate-mode investigation. The page's Execution Mode dropdown posted `execution_mode` to `/api/config`, which wrote it to `config.json` and an `EXECUTION_MODE` env var. The engine reads the mode from the `settings` / `global_config` database row (`engine.py` `_handle_start` and the delegated-plan resume, `server.py` `_get_mcp_pause_config`), which only the `set_execution_mode` MCP tool wrote. Nothing ever read the env var, and `launcher.py` does not load it. Confirmed live: page set to Force Delegate, database `auto`, a capability workflow ran its planner on the model; after `set_execution_mode("force_delegate")` the same workflow logged "Delegating planner to CLI" and paused for the connected tool. Present since the initial release (`7ef3c23`), not a regression.
+
+**Fix (`server.py`):** `post_config` also upserts the `global_config` row when `execution_mode` is posted, and rejects unknown values with a 400. `GET /setup` shows the database value (so a change made through `set_execution_mode` appears on the page), and the page now preselects it on load; before, the dropdown always started on "Auto". The database stays the single source of truth; `config.json` still keeps a copy, unused by the engine.
+
+**Verified:** scratch test with `TestClient` and a temp home/SQLite: page default `auto`; POST `force_delegate` updates the row the engine reads and the page; a `set_execution_mode` change shows on the page; a bad value returns 400 and changes nothing; a POST without `execution_mode` leaves it alone. Not yet re-run live in the rebuilt exe.
+
+**Known, not fixed:** `engine.py` still uses the startup-time `DEFAULT_MODEL` alias where an agent has no `model` (planner, process step, validator, `generate_document`), so a runtime provider switch could send the old provider's model name to the new provider. `LLM_PROVIDER` is stale in two log lines.
