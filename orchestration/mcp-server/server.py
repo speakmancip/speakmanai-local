@@ -600,7 +600,7 @@ async def _get_mcp_pause_config(doc: dict) -> dict | None:
     exec_mode = settings.get("execution_mode", "auto")
     a_exec_mode = agent_doc.get("executionMode", "auto") if agent_doc else "auto"
 
-    if exec_mode == "force_delegate" and agent_type.startswith("AI_"):
+    if exec_mode in ("force_delegate", "delegate_only") and agent_type.startswith("AI_"):
         agent_type = "MCP_LLM_DELEGATE"
     elif exec_mode == "force_background" and agent_type == "MCP_LLM_DELEGATE":
         agent_type = "AI_WORKFLOW"
@@ -1109,10 +1109,10 @@ async def set_execution_mode(mode: str) -> str:
     Allows you to override the agent configurations dynamically.
     
     Args:
-        mode: One of "auto" (default JSON config), "force_delegate" (Claude Code executes all AI steps), or "force_background" (Ollama/Vertex executes all delegated steps).
+        mode: One of "auto" (default JSON config), "force_delegate" (Claude Code executes all AI steps), "force_background" (Ollama/Vertex executes all delegated steps), or "delegate_only" (like force_delegate, and the model API is paused: saved keys and settings are kept but never used, and AI validators auto-pass).
     """
-    if mode not in ("auto", "force_delegate", "force_background"):
-        raise ValueError('mode must be "auto", "force_delegate", or "force_background"')
+    if mode not in ("auto", "force_delegate", "force_background", "delegate_only"):
+        raise ValueError('mode must be "auto", "force_delegate", "force_background", or "delegate_only"')
         
     db = get_db()
     await db["settings"].update_one(
@@ -1530,7 +1530,7 @@ def _apply_config_to_env(cfg: dict) -> None:
             os.environ.pop(env_key, None)
 
 
-_EXECUTION_MODES = ("auto", "force_delegate", "force_background")
+_EXECUTION_MODES = ("auto", "force_delegate", "force_background", "delegate_only")
 
 
 async def _get_execution_mode() -> str:
@@ -1742,6 +1742,7 @@ def _build_setup_html(cfg: dict) -> str:
       <option value="auto">Auto — use each agent's configured model</option>
       <option value="force_delegate">Force Delegate — your AI assistant executes every step</option>
       <option value="force_background">Force Background — run all steps with the LLM above (no assistant handoff)</option>
+      <option value="delegate_only">Delegate Only (API paused) — your AI assistant executes every step; saved keys are kept but not used</option>
     </select>
     <div class="exec-hint" id="exec-hint"></div>
   </div>
@@ -1840,6 +1841,7 @@ function checkModelSize() {{
 const EXEC_HINTS = {{
   auto:             'Each agent runs with its own configured model. The provider chosen above is used to resolve abstract model tiers (fast / standard / advanced).',
   force_delegate:   'Every AI step pauses and is handed to your connected AI assistant (e.g. Claude Code) to execute instead of the LLM.',
+  delegate_only:    'Like Force Delegate, and the model API is paused: no calls are made, no failures when you are out of credits, and your keys and provider settings are kept. Validators are skipped and marked as such. Switch back to Auto to resume API use.',
   force_background: 'Any steps configured to delegate to an AI assistant are overridden and run automatically using the provider above — fully hands-off.',
 }};
 

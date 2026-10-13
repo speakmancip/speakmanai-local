@@ -302,11 +302,24 @@ async def _call_llm(system_prompt: str, user_content: str, model_name: str, mime
 
     return result_text
 
-def _model_configured(model_name: str) -> bool:
+# Execution modes that hand every AI step to the connected tool. "delegate_only" additionally
+# pauses the model API: saved keys and provider settings are kept but never used.
+_DELEGATING_MODES = ("force_delegate", "delegate_only")
+
+
+async def _get_exec_mode(db) -> str:
+    settings = await db["settings"].find_one({"_id": "global_config"}) or {}
+    return settings.get("execution_mode", "auto")
+
+
+def _model_configured(model_name: str, exec_mode: str = "auto") -> bool:
     """True if the engine has what it needs to attempt a model call for model_name.
 
     Checks configuration only, never reachability: a configured provider that is down should
-    still fail visibly. Ollama counts as configured because it needs no credentials."""
+    still fail visibly. Ollama counts as configured because it needs no credentials.
+    In delegate_only mode the model API is paused, so nothing counts as configured."""
+    if exec_mode == "delegate_only":
+        return False
     cfg = _cfg()
     provider, _ = _resolve_model(model_name)
     if provider == "anthropic":
@@ -838,7 +851,7 @@ async def _handle_start(event: dict, queue: asyncio.Queue):
     
     for a in workflow_agents:
         current_type = a.get("agentType", "AI_WORKFLOW")
-        if exec_mode == "force_delegate" and current_type.startswith("AI_"):
+        if exec_mode in _DELEGATING_MODES and current_type.startswith("AI_"):
             a["agentType"] = "MCP_LLM_DELEGATE"
         elif exec_mode == "force_background" and current_type == "MCP_LLM_DELEGATE":
             a["agentType"] = "AI_WORKFLOW"
@@ -861,7 +874,7 @@ async def _handle_start(event: dict, queue: asyncio.Queue):
         
         user_content = f"Workflow Configuration:\n{workflow_doc.get('description', '')}\n\nAVAILABLE_AGENTS:\n{agent_list_for_prompt}\n\nUSER_PROMPT:\n{prompt}\nworkflow_id={workflow_id}"
         
-        is_planner_delegated = exec_mode == "force_delegate" or (exec_mode == "auto" and planner_exec_mode == "delegate")
+        is_planner_delegated = exec_mode in _DELEGATING_MODES or (exec_mode == "auto" and planner_exec_mode == "delegate")
         
         if is_planner_delegated:
             log.info(f"[{session_id}] Delegating planner to CLI.")
@@ -1026,7 +1039,7 @@ async def _handle_resume(event: dict, queue: asyncio.Queue):
                         a_type = a_doc.get("agentType", "")
                         a_exec_mode = a_doc.get("executionMode", "auto")
 
-                        if exec_mode == "force_delegate" and a_type.startswith("AI_"): a_type = "MCP_LLM_DELEGATE"
+                        if exec_mode in _DELEGATING_MODES and a_type.startswith("AI_"): a_type = "MCP_LLM_DELEGATE"
                         elif exec_mode == "auto" and a_exec_mode == "delegate" and a_type.startswith("AI_"): a_type = "MCP_LLM_DELEGATE"
                         elif a_doc.get("model") == "delegate" and a_type.startswith("AI_"): a_type = "MCP_LLM_DELEGATE"
 
@@ -1297,13 +1310,15 @@ async def _handle_validate_step(event: dict, queue: asyncio.Queue):
     if not validator_config:
         log.warning(f"[{session_id}] Validator {validator_agent_id} not found. Auto-passing.")
         score, feedback, max_loops, min_score, val_output = 10, "Validator not found.", 0, 0.0, "Validator not found."
-    elif not _model_configured(validator_config.get("model", DEFAULT_MODEL)):
-        # No model API is configured, so the validator cannot run. It is deliberately not
-        # delegated to the connected tool: that would ask the delegate to validate its own
-        # output. Pass the step through and leave a VALIDATION marker so the run record shows
-        # it was not validated. (VALIDATION events are filtered out of every output scan.)
-        log.warning(f"[{session_id}] No model API configured. Skipping validator {validator_agent_id} for {agent_id} (auto-pass).")
-        score, feedback, max_loops, min_score, val_output = 10, "Validation skipped: no model API configured.", 0, 0.0, "Validation skipped."
+    elif not _model_configured(validator_config.get("model", DEFAULT_MODEL), exec_mode := await _get_exec_mode(db)):
+        # No model API is configured (or it is paused by delegate_only), so the validator
+        # cannot run. It is deliberately not delegated to the connected tool: that would ask
+        # the delegate to validate its own output. Pass the step through and leave a VALIDATION
+        # marker so the run record shows it was not validated. (VALIDATION events are filtered
+        # out of every output scan.)
+        skip_reason = "model API paused (delegate_only mode)" if exec_mode == "delegate_only" else "no model API configured"
+        log.warning(f"[{session_id}] {skip_reason}. Skipping validator {validator_agent_id} for {agent_id} (auto-pass).")
+        score, feedback, max_loops, min_score, val_output = 10, f"Validation skipped: {skip_reason}.", 0, 0.0, "Validation skipped."
         await _log_event_to_db(session_id, {
             "event_id": str(uuid.uuid4()),
             "publish_time": datetime.now(timezone.utc).isoformat(),
@@ -1311,7 +1326,7 @@ async def _handle_validate_step(event: dict, queue: asyncio.Queue):
                 "session_id": session_id, "owner_id": "local_user", "event_type": "VALIDATION",
                 "validation_skipped": "true", "agent_id": agent_id, "validator_agent_id": validator_agent_id,
             },
-            "data": {"reason": "no model API configured"},
+            "data": {"reason": skip_reason},
         }, db)
     else:
         val_config = validator_config.get("validationConfig", {})
@@ -1440,7 +1455,9 @@ async def generate_document_local(session_id: str, format_hint: str) -> str:
     project = await db["projects"].find_one({"session_id": session_id})
     if not project or not project.get("outputs", {}).get("sections"):
         raise ValueError(f"Cannot generate document: Project {session_id} not found or has no completed sections.")
-    
+    if await _get_exec_mode(db) == "delegate_only":
+        raise ValueError("generate_document needs the model API, which is paused (execution mode delegate_only). Assemble the document yourself from get_output, or switch the mode with set_execution_mode.")
+
     full_context = "\n\n".join([f"## {s['title']}\n{s['content']}" for s in project["outputs"]["sections"]])
     system_prompt = f"You are an expert technical writer. Assemble the provided sections into a highly professional {format_hint}. Output in clean Markdown format."
     

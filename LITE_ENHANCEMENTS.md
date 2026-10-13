@@ -382,6 +382,14 @@ Swept every skill in `speakmanai-cc` for references to `RE_DOMAIN_MODELER_V1` / 
 
 **Known, not fixed:** `engine.py` still uses the startup-time `DEFAULT_MODEL` alias where an agent has no `model` (planner, process step, validator, `generate_document`), so a runtime provider switch could send the old provider's model name to the new provider. `LLM_PROVIDER` is stale in two log lines.
 
+## ADDED (2026-10-13): `delegate_only` execution mode (model API paused)
+
+**Why:** out of credits, or the provider is down, and you want delegate runs without failures but without clearing keys and provider settings from the config. Clearing the config also made the validator auto-pass test impossible to run against a real setup.
+
+**What:** a fourth mode, `delegate_only`, on the setup page and in `set_execution_mode`. It does everything `force_delegate` does (planner and every `AI_` step go to the connected tool; `_DELEGATING_MODES` in `engine.py`, plus the `server.py` pause-config site), and `_model_configured(model, exec_mode)` returns false in it, so AI validators auto-pass with a `validation_skipped` VALIDATION event whose reason reads "model API paused (delegate_only mode)". `generate_document` raises a clear error instead of calling the model. Saved keys, GCP project and model choices are never touched. Switching back to `auto` resumes API use.
+
+**Verified:** scratch tests with a stubbed failing `_call_llm` and a key set: `auto` and `force_delegate` still retry through the provider failure (unchanged); `delegate_only` gives one skipped event, no retry, next step queued; `generate_document_local` raises the paused message. Page test: POST `delegate_only` returns 200, the page preselects it, the GCP project value is kept, and the MCP tool accepts it. Not yet run live end to end.
+
 ## CHANGED (2026-10-13): Claude 5.5 and GPT-6 tier defaults, Haiku output cap removed
 
 **What:** per-provider defaults are now Claude `claude-haiku-5-5` / `claude-sonnet-5-5` / `claude-opus-5-5` and OpenAI `gpt-6-luna` / `gpt-6.1-sol` / `gpt-6-astra` (fast / standard / advanced). Gemini and Vertex AI defaults are unchanged (`gemini-3.5-flash-lite` / `gemini-3.8-flash` / `gemini-3.1-pro-preview`). Touches `engine.py` (`MODEL_TIERS`, `_MODEL_TO_TIER`, `_ANTHROPIC_MAX_TOKENS`), `server.py` (setup page `MODELS` dropdowns, dead `_PROVIDER_MODELS`), `README.md`, `SETUP.md`. Older Claude and GPT-4o models stay selectable on the setup page; `claude-haiku-4-5-20251001` and the undated `claude-haiku-4-5` are removed everywhere.

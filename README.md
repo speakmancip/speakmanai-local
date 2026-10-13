@@ -160,8 +160,9 @@ Workflows are defined in JSON — a workflow definition and an array of agents. 
 | **Auto** | Each agent runs as configured — background LLM or delegate as defined |
 | **Force Delegate** | Every AI step is handed to your connected assistant regardless of agent config |
 | **Force Background** | Every step runs against the configured LLM — delegation overridden |
+| **Delegate Only (API paused)** | Like Force Delegate, and the model API is paused: no model calls, no failures when you are out of credits, and your keys and provider settings are kept. AI validators are skipped and marked `validation_skipped`. `generate_document` is unavailable. Switch back to Auto to resume |
 
-Switch modes at any time via the setup page or: *"Set execution mode to force_delegate"*
+Switch modes at any time via the setup page or: *"Set execution mode to delegate_only"*
 
 ---
 
@@ -178,7 +179,7 @@ Switch modes at any time via the setup page or: *"Set execution mode to force_de
 | `list_sessions` | List recent sessions — use to recover a lost session_id |
 | `cancel_session` | Cancel a stuck or failed session |
 | `update_session` | Revise one agent's output in a completed session and cascade the change through everything downstream — no re-run from scratch |
-| `set_execution_mode` | Switch between auto / force_delegate / force_background |
+| `set_execution_mode` | Switch between auto / force_delegate / force_background / delegate_only |
 | `import_architecture_plan` | Import a workflow JSON into the database |
 | `import_workflow` | Import a workflow definition only |
 | `import_agent` | Import or update a single agent |

@@ -230,6 +230,7 @@ Use it to:
 | **Auto** | Each agent runs with its own configured model tier. The provider and models chosen in setup determine what `fast` / `standard` / `advanced` resolve to. |
 | **Force Delegate** | Every AI step pauses and is handed to your connected AI assistant (e.g. Claude Code) to execute instead of calling the LLM API. Useful when you have no API credits. |
 | **Force Background** | Any steps configured to delegate to an AI assistant are overridden and run automatically using the provider above — fully hands-off. |
+| **Delegate Only (API paused)** | Like Force Delegate, and the model API is paused. Nothing calls the provider, so there are no failures when you are out of credits, and your keys and provider settings are kept untouched. Switch back to Auto to resume. |
 
 ---
 
@@ -315,7 +316,7 @@ Ensure you started with `--profile mongo`. Without it the MongoDB container does
 The `extra_hosts: host.docker.internal:host-gateway` entry in `docker-compose.yml` handles this on Linux. On Mac and Windows, `host.docker.internal` resolves automatically.
 
 **No API credits / want to test without LLM costs**
-Use Force Delegate mode — your connected AI assistant (Claude Code) executes all AI steps instead of calling the LLM API. Set it in the setup page or call `set_execution_mode("force_delegate")` via MCP. Validators are not delegated: with no model API configured they auto-pass, and the run record carries a `validation_skipped` marker for each skipped step.
+Use Delegate Only mode — your connected AI assistant (Claude Code) executes all AI steps and the model API is paused, so your keys stay saved but are never used. Set it in the setup page or call `set_execution_mode("delegate_only")` via MCP, and switch back to Auto when you have credits again. Validators are not delegated: while the API is paused (or when no model API is configured at all) they auto-pass, and the run record carries a `validation_skipped` marker for each skipped step. `generate_document` needs the model and is unavailable in this mode. Plain Force Delegate also hands AI steps to your assistant, but it still calls a configured model for validators.
 
 **Desktop exe logs**
 If the exe starts but something isn't working, check `~/.speakmanai/speakmanai.log` for details.
