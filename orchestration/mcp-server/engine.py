@@ -21,10 +21,12 @@ def _extract_json(text: str):
         raise
 
 # Max output tokens per Anthropic model; models not listed get the 64000 default in _call_llm.
-# Haiku 5.5 allows 128K output (1M context). The old 8192 cap, carried over from older Haiku
+# The 5.5 models allow 128K output (1M context). The old 8192 cap, carried over from older Haiku
 # models, truncated every fast-tier response.
 _ANTHROPIC_MAX_TOKENS: dict[str, int] = {
-    "claude-haiku-5-5": 128000,
+    "claude-haiku-5-5":  128000,
+    "claude-sonnet-5-5": 128000,
+    "claude-opus-5-5":   128000,
 }
 
 # ─────────────────────────────────────────────
