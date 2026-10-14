@@ -2072,8 +2072,8 @@ def _build_setup_html(cfg: dict) -> str:
       <div class="exec-hint" id="skills-status"></div>
       <button class="btn btn-outline" id="skills-btn" onclick="installSkills()" style="display:none; margin-top:6px;">Install skills for Claude Code</button>
       <details class="sub" id="cc-path" style="display:none">
-        <summary><code>claude</code> not recognized in a terminal?</summary>
-        <div class="exec-hint">The installer did not add it to your PATH. Connecting from this page works either way. To run it by its full path:</div>
+        <summary>Can't start <code>claude</code> in a terminal?</summary>
+        <div class="exec-hint">The installer did not add it to your PATH. Connecting from this page works either way, but the first run of <code>claude</code> is where you sign in. To run it by its full path:</div>
         <div class="copy-row"><code id="cc-path-run">&amp; "$env:USERPROFILE\\.local\\bin\\claude.exe"</code><button class="btn btn-outline btn-copy" onclick="copyText('cc-path-run')">Copy</button></div>
         <div class="exec-hint">Or add it to PATH once, then open a new terminal:</div>
         <div class="copy-row"><code id="cc-path-add">[Environment]::SetEnvironmentVariable("Path", $env:Path + ";$env:USERPROFILE\\.local\\bin", "User")</code><button class="btn btn-outline btn-copy" onclick="copyText('cc-path-add')">Copy</button></div>
@@ -2267,7 +2267,7 @@ async function refreshAssistantStatus(announce) {{
   const cc = st.claude_code;
   $('cc-ready').style.display = cc.detected ? 'block' : 'none';
   $('cc-missing').style.display = cc.cli_found ? 'none' : 'block';
-  $('cc-path').style.display = cc.windows && cc.cli_found && !cc.cli_on_path && !cc.registered ? 'block' : 'none';
+  $('cc-path').style.display = cc.windows && cc.cli_found && !cc.cli_on_path ? 'block' : 'none';
   $('cc-next').style.display = cc.registered ? 'block' : 'none';
   $('cc-hint').style.display = cc.registered ? 'none' : 'block';
   const btn = $('cc-connect');
