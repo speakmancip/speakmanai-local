@@ -495,3 +495,22 @@ Worth reporting to Anthropic that the link strips an argument named `session_id`
 **Verified:** over real MCP against a dev server in `delegate_only`: a small run gives the same inline context as before (856 characters, no refs); with a 30,000-character clarifier output the business analyst pause drops from over 30,000 to 802 characters, lists the clarifier with 30,483 characters, and `get_output` returns exactly that length.
 
 **Not verified:** the HITL gate path (shares the helper, not exercised), a full SAD run through the Claude app, and token or cost savings (character counts only). Whether clients follow the note rather than guess is the main thing the next app run should show.
+
+## MEASURED (2026-10-14): what JSON string escaping adds to agent outputs
+
+**Why:** tool results carry long text (a pause's `context`, `get_output` content) inside a JSON string, so every quote and line break is escaped. Question: is that worth fixing, for example by moving off JSON?
+
+**Method:** read-only on the real `~/.speakmanai` database. For the two largest completed sessions, each agent's latest output was compared raw against `json.dumps` of it (the escaped body of a JSON string, and wrapped as a tool result). Tokens were counted with OpenAI's `cl100k_base` and `o200k_base` through tiktoken, because no offline Claude tokenizer was available.
+
+**Result (all outputs of a session together):**
+
+| Session | Characters | Tokens |
+|---|---|---|
+| Solution architecture (Tip App, Gemini quality test, 9 outputs, 141,934 characters) | +4.1% | +8.5% to +8.7% |
+| Requirements engineering (14 outputs, 379,475 characters) | +9.6% | +18.9% to +19.5% |
+
+Per output, JSON outputs grow 10 to 12% in characters and about 25% in tokens (the API schema and endpoint designers are the worst); the technical writer's markdown grows 1% and 4%. Tokens grow faster than characters because an escaped `\"` or `\n` breaks the usual token boundaries.
+
+**Caveats:** OpenAI tokenizers stand in for Claude's, so exact counts will differ. The SAD session was produced by Gemini. Only tool results are escaped this way; the `# CONTEXT FROM` prompts the model API path builds and the agents' own output are not.
+
+**Decision:** no change for v1.5.0. The reference change above removes more, since large outputs are no longer repeated and so are no longer escaped. A second plain-text content block would save about 9% of tool-result tokens on a SAD run and needs a cross-client test, so it is parked in `V1_5_0_PLAN.md`. A move to XML, YAML or markdown as the agent format would touch every agent schema, validator, document builder and skill for at most that saving, and was not pursued.
