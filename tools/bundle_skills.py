@@ -10,6 +10,7 @@ Reads a checkout of the speakmanai-cc repo (default: $SPEAKMANAI_CC_DIR, else a
 
     <out>/claude-code/skills/<skill>/...   the Claude Code skills (.claude/skills)
     <out>/claude-code/assets/prompts/...    the synthesis prompts
+    <out>/claude-code/assets/scripts/...    render_html.py, the local HTML renderer
     <out>/mcp-skills/<skill>/...           the desktop variants, served by get_skill
     <out>/downloads/*.zip                  bundles for manual clients, built by
                                            desktop-skills/build.ps1 in that checkout
@@ -30,7 +31,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 # The synthesis prompts are the only supporting files the skills read. speakmanai-cc dropped
 # its PDF scripts and templates (PR #6).
-ASSET_DIRS = ("prompts",)
+ASSET_DIRS = ("prompts", "scripts")
 DOWNLOADS = (
     "speakmanai-sdlc.zip",
     "generate-sad.zip",

@@ -510,10 +510,6 @@ async def poll_workflow(mcp_ctx: Context, session_id: str = "", sid: str = "") -
 # hit one in the Claude app) and stops the same output being re-sent in every later pause.
 PAUSE_INLINE_LIMIT = int(os.environ.get("SPEAKMANAI_PAUSE_INLINE_LIMIT", "20000"))
 PAUSE_INLINE_SMALL = 2000  # outputs under this many characters stay inline even in reference mode
-# render_document returns the HTML in its result: about 1.3 times the markdown for prose, over 2 times
-# for table-heavy text. Past this many characters of HTML it declines and the client delivers the
-# markdown (the HTML is a nicety). One result hit a client limit at 73,540 characters.
-RENDER_INLINE_LIMIT = int(os.environ.get("SPEAKMANAI_RENDER_LIMIT", "60000"))
 
 
 def _dependency_blocks(agent_doc: dict, events: list) -> tuple[list, str]:
@@ -1380,11 +1376,6 @@ async def render_document(markdown: str, title: str = "", subtitle: str = "") ->
     Convert a Markdown document into a fully self-contained, SPEAKMAN.AI-branded HTML document
     (inline CSS, base64 logo - no external files, no local Python/Node required).
 
-    HTML is optional. The HTML result is 1.3 to 2 times the size of the markdown, so when it
-    would be over about 60,000 characters it is not returned: the result has "rendered": false and
-    no html. In that case, and when you can skip the call for a large document, deliver the
-    markdown document itself and tell the user the HTML version was left out because it is large.
-
     To rebrand: edit the returned HTML directly (swap the logo <img> src and the header/accent
     CSS custom properties) - there is no template file system.
 
@@ -1394,23 +1385,10 @@ async def render_document(markdown: str, title: str = "", subtitle: str = "") ->
         subtitle: Document subtitle (default: "Generated {today}").
 
     Returns:
-        JSON: {"html": "<full HTML document string>"}, or when the document is too large
-        {"rendered": false, "html": null, "message": "..."}
+        JSON: {"html": "<full HTML document string>"}
     """
     try:
-        result = await render_document_local(markdown, title or None, subtitle or None)
-        if len(result) > RENDER_INLINE_LIMIT:
-            return json.dumps({
-                "rendered": False,
-                "html": None,
-                "message": (
-                    f"The HTML version would be {len(result):,} characters, over the {RENDER_INLINE_LIMIT:,} character "
-                    "limit for a tool result, so it was not returned. Deliver the markdown document to the user as the "
-                    "final document and say the HTML version was left out because it is too large. Markdown viewers "
-                    "show it well. Do not resend the document through a tool to work around this."
-                ),
-            })
-        return result
+        return await render_document_local(markdown, title or None, subtitle or None)
     except Exception as e:
         raise RuntimeError(f"render_document failed: {str(e)}")
 
