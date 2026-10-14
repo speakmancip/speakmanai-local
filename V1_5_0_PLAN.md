@@ -2,6 +2,22 @@
 
 Drafted 2026-10-13 on `release/v1.5.0`. Working document, not a decision record. Inputs: the business-docs work brief (`speakmanai_business/findings/2026-10-13-lite-v1.5.0-work-brief.md`), the delegate-mode findings in the same folder, and checks made in this repo and in `speakmanai-cc` on 2026-10-13.
 
+## Status and how to resume (2026-10-14)
+
+Branch `release/v1.5.0`, pushed, head `8cc3feb`, no release PR, no tag, no signed build, nothing merged to `master`. `speakmanai-cc` is on `master` at `0cbaeaa` (PRs #6 and #7 merged). Newest unsigned build: `dist\v1.5.0-wf\SpeakmanAI.exe` (11:48 on 10-14), built with skills from `speakmanai-cc` `0cbaeaa`. The other `dist\v1.5.0*` and `dist\spike-sid` folders are older builds and can be deleted. A build needs `python tools/bundle_skills.py` first, then `python -m PyInstaller speakmanai.spec`. Any new module that `server.py` imports must also go in `speakmanai.spec` (`datas` and `excludes`), because the server is loaded by path.
+
+**Built and tested** (details and evidence in `LITE_ENHANCEMENTS.md`, entries dated 2026-10-13 and 2026-10-14): validators auto-pass with no model API; `delegate_only` mode and a fresh install defaulting to it; Claude Code registration through `claude mcp add`; the 17 skills bundled in the exe and installed with backups; `list_skills` and `get_skill`; the reorganised setup page; the Claude app link dropping `session_id` (every session tool also takes `sid`); delegated pauses listing large dependency outputs by reference; HTML opt-in and rendered locally by `scripts/render_html.py` (`speakmanai-cc` PR #7); and the "Update workflows" button (`workflows_sync.py`). The owner tested the `v1.5.0-wf` exe and it passed.
+
+**Decisions this session:** shipped workflow IDs are the owner's domain and an update replaces them with a backup (a user reapplies an edit or copies to a new ID); HTML only when the user asks, locally if the client has a shell, `render_document` only without one; fix the skills, not the server, for client behavior rules; the Technical Writer is out of the SAD workflow on purpose (cost); no release PR or tag until just before outside testing; Mongo-mode workflow refresh is a later script plus instructions.
+
+**Open, in rough order:**
+1. Clean-machine install test (test round item 1), ideally on the signed exe: Windows Sandbox is available on the dev machine but not enabled (needs an elevated `Enable-WindowsOptionalFeature -Online -FeatureName Containers-DisposableClientVM -All` and a restart); `tools/clean-machine-test.wsb` (gitignored, local) maps the exe folder. A real no-Claude-Code run has not been done, only a simulation.
+2. Copilot Studio full run (storage for `outputs/`, whether a large `render_document` argument works), Cursor and Codex once each.
+3. Old-database warning for Mongo mode, and whether to apply the workflow update automatically after an upgrade (today: button only).
+4. Parked: "Disconnect and remove", "Reset all data", `executed_by` on events, the plain-text second content block, `install.sh` upgrade prompts (17 y/N prompts, stops on closed input), pinning `speakmanai-cc` for the bundle, the synced `speakmanai-sdlc` plugin duplicating skills in Claude Code.
+5. Release: PR for `release/v1.5.0`, merge, tag `v1.5.0`, signed exe (`az login`, `.codesign\sign-exe.ps1`), GitHub release, then the clean-machine test on the signed build.
+
+**Elsewhere:** `speakman_generic/LITE_PARITY_HANDOFF.md` (untracked there) has Tasks 4 (`sid`) and 5 (pause references) for a Generic session. `D:\git\speakmanAU\ingest-build-record-corpus.js` has two uncommitted added lines for the `speakmanai/business` file list. The brain's `2026-10-13-lite-v1.5.0-progress.md` is current as of this status (brain updates need `--dry-run` and a go-ahead first). Reusable test scripts are in `D:\git\speakmanai\speakmanai_light\local-tests\` (outside the repo) with an index.
 ## Goal
 
 A new Windows user downloads one exe and gets the engine and the skills together. They run workflows in delegate mode through the coding tool they already use, with no model API key. Someone with their own key switches on the setup page. A hosted trial is out of scope.
@@ -55,7 +71,6 @@ Skills are not an MCP concept, so no client installs one from a server. The cont
 
 - **Built (2026-10-13):** `list_skills` and `get_skill(name)` serve all 17 skills from the `desktop-skills` variants, with bundled files inlined, and the server instructions point at them. Verified over real MCP from the exe. Tested headless in Claude Code with all skills disabled: Claude found and followed the skill unprompted and completed a keyless workflow. What remains is the test in the Claude app itself.
 - Found while testing: the `speakmanai-sdlc` plugin uploaded in the Claude app syncs into Claude Code (`~/.claude/plugins/synced/`), so a user of both gets the skills twice, as `generate-sad` and `speakmanai-sdlc:generate-sad`, possibly at different versions. Decide whether the installer should detect that and skip, or whether it does not matter.
-- Add `list_skills` and `get_skill(name)` tools, with prompt files inlined so the `ASSET_DIR` lookup disappears. Point the server instructions at them.
 - Test with `generate-sad` and one self-contained skill, first in the Claude app, then Copilot Studio if cheap.
 - Success means a user who has only added the MCP server can say "run the SAD workflow" and the model finds and follows the skill unprompted. If that is unreliable, the zip route stays as the supported path.
 - Claude Code keeps real installed skills. They are discovered automatically and `get_skill` cannot match that.
@@ -70,9 +85,7 @@ Skills are not an MCP concept, so no client installs one from a server. The cont
 
 ### 5. Cleanup
 
-- **Done (2026-10-13, speakmanai-cc PR #6, merged):** puppeteer, `scripts/doc_writer.py`, `scripts/preprocess.py`, `templates/` and `package.json` are removed, and the two install scripts and the README no longer mention them.
-- Remove puppeteer, `scripts/doc_writer.py` and `scripts/preprocess.py` from `speakmanai-cc`, the two install scripts and the README. Keep the generated-app note: `generate-speakmanai-code-python` can scaffold an app with a Node PDF subprocess, which is separate from the installer.
-- Remove the stale Node requirement from the docs.
+- **Done (2026-10-13, speakmanai-cc PR #6, merged):** puppeteer, `scripts/doc_writer.py`, `scripts/preprocess.py`, `templates/` and `package.json` are removed, and the two install scripts and the README no longer mention them or the Node requirement. Generated-app note kept: `generate-speakmanai-code-python` can scaffold an app with a Node PDF subprocess, which is separate from the installer. (PR #7 later added `scripts/render_html.py`, a different script.)
 
 ### 6. Optional, owner to pick
 
