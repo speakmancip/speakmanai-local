@@ -100,6 +100,7 @@ Tier 1 and 2 must pass before release. Tier 3 is recorded either way.
 7. Skill update: edit an installed skill, reinstall, confirm the backup and the version marker.
 8. Tier 3: Copilot Studio via the tunnel (re-test, as the earlier run is not confirmed as delegate mode), Codex once, Cursor once.
 9. Record where testers stall during install.
+- **Owner test, 2026-10-14:** the unsigned dist\v1.5.0-wf\SpeakmanAI.exe (sid alias, pause references, local HTML script, Update workflows button) was tested by the owner and passed. Details of what was exercised were not recorded.
 
 ## Release
 
