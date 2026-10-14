@@ -65,6 +65,7 @@ Skills are not an MCP concept, so no client installs one from a server. The cont
 
 - Copilot Studio: does attached storage let a skill save `outputs/` files? Validate with the existing SAD run.
 - The Claude app: confirm the manual steps in the merged build, and what happens to files a skill writes.
+  - Found 2026-10-14: the app's computer link drops an argument named `session_id`. Fixed by also accepting `sid` (see LITE_ENHANCEMENTS). Still to check: a full workflow run through the link.
 - Cursor and Codex: test once each and record the result either way, or leave them labelled untested.
 
 ### 5. Cleanup

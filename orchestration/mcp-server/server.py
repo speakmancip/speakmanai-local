@@ -147,25 +147,6 @@ def _need_session_id(session_id: str = "", sid: str = "") -> str:
     return value
 
 
-@mcp.tool(name="spike_echo_args", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
-async def spike_echo_args(session_id: str = "", sid: str = "", session: str = "", id: str = "", sessionid: str = "", thing: str = "") -> str:
-    """
-    Diagnostic only. Reports which of these arguments the client actually delivered.
-    Call it once with the same short value (for example 'abc') for every argument.
-
-    Args:
-        session_id: test value
-        sid: test value
-        session: test value
-        id: test value
-        sessionid: test value
-        thing: test value
-    """
-    received = {k: v for k, v in {"session_id": session_id, "sid": sid, "session": session, "id": id, "sessionid": sessionid, "thing": thing}.items() if v}
-    log.info(f"spike_echo_args received: {received}")
-    return json.dumps({"received": received, "dropped": [k for k in ("session_id", "sid", "session", "id", "sessionid", "thing") if k not in received]})
-
-
 # ─────────────────────────────────────────────
 # Tool 1: list_workflows
 # ─────────────────────────────────────────────
