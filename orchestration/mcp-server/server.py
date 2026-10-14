@@ -463,13 +463,16 @@ async def poll_workflow(mcp_ctx: Context, session_id: str = "", sid: str = "") -
         }
         if mcp_input_config.get("origin_agent_id"):
             result["input_required"]["origin_agent_id"] = mcp_input_config["origin_agent_id"]
+        if mcp_input_config.get("context_refs"):
+            result["input_required"]["context_refs"] = mcp_input_config["context_refs"]
 
         if agent_type == "MCP_LLM_DELEGATE":
             result["message"] = (
                 "The workflow has paused and is delegating this execution step to YOU (the connected AI assistant). "
                 "Do NOT ask the user for this information. Read input_required.prompt, input_required.context, "
                 "and input_required.schema. Execute the task yourself using your own capabilities, "
-                "then immediately call submit_response(session_id, response, pause_id=input_required.pause_id) with the result."
+                "then immediately call submit_response(session_id, response, pause_id=input_required.pause_id) with the result. "
+                "If input_required.context_refs is present, the context lists large earlier outputs by agent_id instead of repeating them: use your own copy only if you hold the complete text, otherwise call get_output for each."
             )
         elif agent_type == "HITL_VALIDATOR":
             result["message"] = (
@@ -501,8 +504,17 @@ async def poll_workflow(mcp_ctx: Context, session_id: str = "", sid: str = "") -
 
 
 
-def _compile_dependencies_context(agent_doc: dict, events: list) -> str:
-    """Compiles a unified context block based on the agent's specific dependencies."""
+# A delegated pause normally carries the full text of every output the step depends on. Past this
+# size the pause lists the large outputs by agent_id instead, and the client uses what it already
+# holds or fetches them with get_output. Keeps one pause under client result limits (73K characters
+# hit one in the Claude app) and stops the same output being re-sent in every later pause.
+PAUSE_INLINE_LIMIT = int(os.environ.get("SPEAKMANAI_PAUSE_INLINE_LIMIT", "20000"))
+PAUSE_INLINE_SMALL = 2000  # outputs under this many characters stay inline even in reference mode
+
+
+def _dependency_blocks(agent_doc: dict, events: list) -> tuple[list, str]:
+    """The (agent_id, content) pairs an agent depends on, last write wins. With no declared
+    dependencies there are no pairs and the second value is the session's first output."""
     dependencies = agent_doc.get("dependencies", []) if agent_doc else []
     latest_outputs = {}
     first_output = ""
@@ -519,21 +531,44 @@ def _compile_dependencies_context(agent_doc: dict, events: list) -> str:
                 first_output = content
 
     if not dependencies:
-        return first_output
-        
-    compiled_parts = []
-    get_all = "*" in dependencies
-    if get_all:
-        for agent, content in latest_outputs.items():
-            if not agent.startswith("root_planner"):
-                compiled_parts.append(f"# CONTEXT FROM {agent}:\n{content}")
-    else:
-        for dep in dependencies:
-            if dep in latest_outputs:
-                compiled_parts.append(f"# CONTEXT FROM {dep}:\n{latest_outputs[dep]}")
-                
-    return "\n\n".join(compiled_parts) if compiled_parts else ""
+        return [], first_output
 
+    if "*" in dependencies:
+        return [(a, c) for a, c in latest_outputs.items() if not a.startswith("root_planner")], ""
+    return [(d, latest_outputs[d]) for d in dependencies if d in latest_outputs], ""
+
+
+async def _compile_pause_context(agent_doc: dict, events: list, session_id: str) -> tuple[str, list]:
+    """Context for a pause: the dependency outputs inline when they are small, otherwise the
+    large ones listed by agent_id. Returns (context text, context_refs)."""
+    blocks, plain = _dependency_blocks(agent_doc, events)
+    if plain or not blocks:
+        return plain, []
+    inline = "\n\n".join(f"# CONTEXT FROM {a}:\n{c}" for a, c in blocks)
+    if len(inline) <= PAUSE_INLINE_LIMIT:
+        return inline, []
+
+    # get_output serves an agent's output only for agents in the aggregate index, so only those can be referenced.
+    fetchable = set(_aggregate_agent_index(events, await _build_human_exclusion_set(events)))
+    parts, refs = [], []
+    for agent, content in blocks:
+        if agent in fetchable and len(content) > PAUSE_INLINE_SMALL:
+            refs.append({"agent_id": agent, "chars": len(content)})
+        else:
+            parts.append(f"# CONTEXT FROM {agent}:\n{content}")
+    if not refs:
+        return inline, []
+
+    listing = "\n".join(f"- {r['agent_id']}: {r['chars']} characters" for r in refs)
+    note = (
+        "# CONTEXT NOT INCLUDED\n"
+        "This step also depends on the outputs below. They are large, so they are not repeated here:\n"
+        f"{listing}\n"
+        "For each one: if its complete text is still in this conversation, exactly as it was written, use that. "
+        f"Otherwise call get_output(agent_id, session_id='{session_id}') and read the returned content. "
+        "Do not work from memory, a summary or a partial copy of an output."
+    )
+    return "\n\n".join([note] + parts), refs
 
 def _latest_pause_event(events: list) -> dict | None:
     """The most recent MCP_PAUSE event - the pause a session in AWAITING_INPUT is waiting on.
@@ -577,7 +612,7 @@ async def _get_mcp_pause_config(doc: dict) -> dict | None:
         origin_agent_id = origin_source.get("source_agent_id", "")
         origin_content = origin_source.get("content", "")
 
-        dep_context = _compile_dependencies_context(hitl_agent_doc, events)
+        dep_context, context_refs = await _compile_pause_context(hitl_agent_doc, events, doc.get("session_id", ""))
         hitl_context = f"# OUTPUT UNDER REVIEW ({origin_agent_id})\n{origin_content}"
         if dep_context:
             hitl_context += f"\n\n{dep_context}"
@@ -600,6 +635,7 @@ async def _get_mcp_pause_config(doc: dict) -> dict | None:
             "prompt": hitl_agent_doc.get("systemPrompt", "") if hitl_agent_doc else "",
             "schema": hitl_agent_doc.get("inputSchema", {}) if hitl_agent_doc else {},
             "context": hitl_context,
+            "context_refs": context_refs,
             "step_index": mcp_pause_step_index,
             "pause_id": mcp_pause_event.get("event_id", ""),
             "agent_id": hitl_agent_id,
@@ -641,7 +677,10 @@ async def _get_mcp_pause_config(doc: dict) -> dict | None:
     pause_exec_ctx = mcp_pause_event.get("data", {}).get("execution_context", {}) if mcp_pause_event else {}
     # A delegated planner's pause carries its own input (workflow description, agent list and
     # the user's request). Every other pause gets its declared dependencies.
-    context = pause_exec_ctx.get("planner_input") or _compile_dependencies_context(agent_doc, events)
+    context_refs = []
+    context = pause_exec_ctx.get("planner_input")
+    if not context:
+        context, context_refs = await _compile_pause_context(agent_doc, events, doc.get("session_id", ""))
 
     # If this pause is a re-prompt after a failed validation or a human "Update" decision,
     # surface the prior attempt and the reviewer's feedback so the delegate can revise its answer.
@@ -679,6 +718,7 @@ async def _get_mcp_pause_config(doc: dict) -> dict | None:
         "prompt": agent_doc.get("systemPrompt", "") if agent_doc else "",
         "schema": schema,
         "context": context,
+        "context_refs": context_refs,
         "step_index": mcp_pause_step_index,
         "pause_id": mcp_pause_event.get("event_id", ""),
         "agent_id": agent_id,
