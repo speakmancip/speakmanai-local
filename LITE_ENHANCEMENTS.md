@@ -480,4 +480,8 @@ Status dots start grey, not red, and the orange Vertex warning is a neutral note
 
 **Verified:** over real MCP against a dev server, `session_id` only, `sid` only, both, and neither (clear error) on `poll_workflow`, and `get_outputs`, `cancel_session`, `get_output`, `submit_response` via `sid`; all eight tools list `sid` and none requires `session_id`. The diagnostic result above came from the unsigned `dist\spike-sid` exe in a linked Claude app chat.
 
-**Not verified:** a full workflow run through the linked Claude app using `sid`. Worth reporting to Anthropic that the link strips an argument named `session_id`.
+**End to end (2026-10-14, rebuilt `dist\v1.5.0-sid` exe, delegate mode, linked Claude app chat):** a full ToolShare SAD run completed using `sid` on every call. Report-back findings from that run, not yet acted on:
+- `poll_workflow` returned 73,540 characters at one pause, over the app's result limit, so the app saved it to a file and Claude parsed the file with Python. The technical writer step then got only a condensed summary and the SAD was assembled by script. This is the delegate-context size problem seen in Claude Code (about 265,000 characters of context per SAD run), now blocking in a client with a hard result cap.
+- `render_document` takes the whole markdown as an argument, so 82K characters through it was impractical. Claude rendered locally with the same styling, so the HTML is not the server's output.
+- Claude reported that the advertised schemas for `poll_workflow`, `submit_response`, `get_outputs` and `get_output` still list only `session_id`. The exe's `tools/list` offers `sid` on all eight and requires neither (checked over MCP), so this is probably a tool list the app cached before the change. Unconfirmed.
+Worth reporting to Anthropic that the link strips an argument named `session_id`.
