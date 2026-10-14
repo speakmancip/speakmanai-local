@@ -2072,7 +2072,7 @@ def _build_setup_html(cfg: dict) -> str:
         <div class="copy-row"><code id="cc-path-add">[Environment]::SetEnvironmentVariable("Path", $env:Path + ";$env:USERPROFILE\\.local\\bin", "User")</code><button class="btn btn-outline btn-copy" onclick="copyText('cc-path-add')">Copy</button></div>
         <div class="exec-hint">Connecting from this page works either way.</div>
       </div>
-      <div class="next-box" id="cc-next" style="display:none">Next: open Claude Code in any folder and type <code>/generate-sad</code>, or ask it to list the SPEAKMAN.AI workflows. If Claude Code was already open, restart it first.</div>
+      <div class="next-box" id="cc-next" style="display:none">Next: open Claude Code in any folder and type <code>/generate-sad</code>, or ask it to list the SPEAKMAN.AI workflows. If Claude Code was already open, restart it first. This covers Claude Code, including the Claude Code part of the Claude app. The chat side of the Claude app has its own settings: use the Claude app tab above.</div>
       <div class="exec-hint" id="skills-status"></div>
       <button class="btn btn-outline" id="skills-btn" onclick="installSkills()" style="display:none; margin-top:6px;">Install skills for Claude Code</button>
       <details class="sub" id="cc-manual">
