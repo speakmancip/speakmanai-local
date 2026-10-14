@@ -41,8 +41,8 @@ Copilot Studio needs a public URL (a tunnel), which makes it an enterprise fit. 
 
 ### 2. Bundle and install the skills
 
-- Single source: the exe build pulls a pinned copy of `speakmanai-cc` (a tag or commit), with its skills, prompts and templates, and records that version.
-- Claude Code install, unattended, user level only: copy the 17 skills to `~/.claude/skills`, and `prompts`, `scripts` and `templates` to `~/.claude/speakmanai-cc`. Triggered on first run or from the setup page button.
+- Single source: the exe build pulls a pinned copy of `speakmanai-cc` (a tag or commit), with its skills and synthesis prompts, and records that version.
+- Claude Code install, unattended, user level only: copy the 17 skills to `~/.claude/skills`, and the synthesis `prompts` to `~/.claude/speakmanai-cc`. Triggered on first run or from the setup page button.
 - Updates: if a skill file differs from the version the exe last installed, back it up before overwriting. Write the installed version to a marker file so the exe can tell.
 - `install.ps1` and `install.sh` stay for people who want the skills without the engine. Remove puppeteer from both (item 5).
 - For the manual clients, the setup page offers the bundles for download.
@@ -68,6 +68,7 @@ Skills are not an MCP concept, so no client installs one from a server. The cont
 
 ### 5. Cleanup
 
+- **Done (2026-10-13, speakmanai-cc PR #6, merged):** puppeteer, `scripts/doc_writer.py`, `scripts/preprocess.py`, `templates/` and `package.json` are removed, and the two install scripts and the README no longer mention them.
 - Remove puppeteer, `scripts/doc_writer.py` and `scripts/preprocess.py` from `speakmanai-cc`, the two install scripts and the README. Keep the generated-app note: `generate-speakmanai-code-python` can scaffold an app with a Node PDF subprocess, which is separate from the installer.
 - Remove the stale Node requirement from the docs.
 

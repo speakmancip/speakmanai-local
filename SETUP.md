@@ -212,7 +212,7 @@ The exe carries the SPEAKMAN.AI skills from the [speakmanai-cc](https://github.c
 
 **At build time**, `tools/bundle_skills.py` reads a speakmanai-cc checkout and stages `build/skills_bundle`:
 
-- the Claude Code skills (`.claude/skills`) with their `prompts` and `templates`
+- the Claude Code skills (`.claude/skills`) with their synthesis `prompts`
 - the upload bundles for other assistants, built by that repo's `desktop-skills/build.ps1` (needs PowerShell; pass `--skip-zips` to leave them out)
 - `manifest.json` with the skills version (plugin version plus the checkout's commit) and a hash per file
 

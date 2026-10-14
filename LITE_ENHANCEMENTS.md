@@ -412,6 +412,8 @@ Swept every skill in `speakmanai-cc` for references to `RE_DOMAIN_MODELER_V1` / 
 
 **Live-tested 2026-10-13** (rebuilt unsigned `dist\v1.5.0` exe, 36.1 MB, about 0.55 MB larger): the exe finds the bundle, `/api/skills-status` reports 17 skills at `1.4.0+b8c2ba3`, a bundle download returns the zip, and the install on the dev machine was a no-op that wrote only `installed.json`. Not tested in the exe: a first install on a clean machine, the backup path, and the buttons clicked in a browser.
 
+**Follow-up (2026-10-13):** `speakmanai-cc` PR #6 removed its PDF scripts, `templates/` and the puppeteer dependency, so the bundle now holds the skills and the synthesis prompts only (20 files, version `1.4.0+d437ee0`). `ASSET_DIRS` in the bundler is down to `prompts`.
+
 **Known limits:** the build takes whatever the `speakmanai-cc` checkout holds rather than a pinned tag. The skills are not installed on first run, only on a click. A user who edits a skill sees "update available" until they update, which replaces their edit (after backing it up). Skills removed from a later bundle are left installed.
 
 ## ADDED (2026-10-13, experimental): skills served over MCP (`list_skills`, `get_skill`)

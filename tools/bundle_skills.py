@@ -9,7 +9,7 @@ Reads a checkout of the speakmanai-cc repo (default: $SPEAKMANAI_CC_DIR, else a
 `speakmanai-cc` folder beside this repo's grandparent) and writes:
 
     <out>/claude-code/skills/<skill>/...   the Claude Code skills (.claude/skills)
-    <out>/claude-code/assets/prompts|templates/...
+    <out>/claude-code/assets/prompts/...    the synthesis prompts
     <out>/mcp-skills/<skill>/...           the desktop variants, served by get_skill
     <out>/downloads/*.zip                  bundles for manual clients, built by
                                            desktop-skills/build.ps1 in that checkout
@@ -28,9 +28,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-# `scripts/` (doc_writer.py, preprocess.py) is left out on purpose: no skill calls it and it
-# needs Node and puppeteer.
-ASSET_DIRS = ("prompts", "templates")
+# The synthesis prompts are the only supporting files the skills read. speakmanai-cc dropped
+# its PDF scripts and templates (PR #6).
+ASSET_DIRS = ("prompts",)
 DOWNLOADS = (
     "speakmanai-sdlc.zip",
     "generate-sad.zip",
