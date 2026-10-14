@@ -2061,7 +2061,7 @@ def _build_setup_html(cfg: dict) -> str:
         <div class="copy-row"><code id="cc-install-cmd">irm https://claude.ai/install.ps1 | iex</code><button class="btn btn-outline btn-copy" onclick="copyText('cc-install-cmd')">Copy</button></div>
         <div class="exec-hint">Then run <code>claude</code> once. It opens your browser so you can sign in. Then press Check again. The Claude app on its own does not include this command.</div>
         <div class="btn-row">
-          <a class="btn btn-outline" href="https://claude.com/claude-code" target="_blank" rel="noopener">Get Claude Code</a>
+          <a class="btn btn-outline" href="https://code.claude.com/docs/en/overview" target="_blank" rel="noopener">Official install steps</a>
           <button class="btn btn-outline" onclick="refreshAssistantStatus(true)">Check again</button>
         </div>
       </div>
@@ -2070,7 +2070,7 @@ def _build_setup_html(cfg: dict) -> str:
         <div class="copy-row"><code id="cc-path-run">&amp; "$env:USERPROFILE\\.local\\bin\\claude.exe"</code><button class="btn btn-outline btn-copy" onclick="copyText('cc-path-run')">Copy</button></div>
         <div class="exec-hint">Or add it to PATH once, then open a new terminal:</div>
         <div class="copy-row"><code id="cc-path-add">[Environment]::SetEnvironmentVariable("Path", $env:Path + ";$env:USERPROFILE\\.local\\bin", "User")</code><button class="btn btn-outline btn-copy" onclick="copyText('cc-path-add')">Copy</button></div>
-        <div class="exec-hint">Connecting from this page works either way.</div>
+        <div class="exec-hint">Connecting from this page works either way. <a href="https://code.claude.com/docs/en/troubleshoot-install#command-not-found-claude-after-installation" target="_blank" rel="noopener">Anthropic's PATH help</a></div>
       </div>
       <div class="next-box" id="cc-next" style="display:none">Next: open Claude Code in any folder and type <code>/generate-sad</code>, or ask it to list the SPEAKMAN.AI workflows. If Claude Code was already open, restart it first. This covers Claude Code, including the Claude Code part of the Claude app. The chat side of the Claude app has its own settings: use the Claude app tab above.</div>
       <div class="exec-hint" id="skills-status"></div>
