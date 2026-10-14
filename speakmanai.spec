@@ -31,6 +31,7 @@ a = Analysis(
         ("orchestration/mcp-server/database_sqlite.py", "orchestration/mcp-server"),
         ("orchestration/mcp-server/document_renderer.py", "orchestration/mcp-server"),
         ("orchestration/mcp-server/skills_installer.py", "orchestration/mcp-server"),
+    ("orchestration/mcp-server/workflows_sync.py", "orchestration/mcp-server"),
     ] + skills_bundle,
     hiddenimports=[
         # FastAPI / Starlette
@@ -68,7 +69,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["motor", "pymongo", "server", "engine", "database", "database_sqlite", "skills_installer"],
+    excludes=["motor", "pymongo", "server", "engine", "database", "database_sqlite", "skills_installer", "workflows_sync"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
