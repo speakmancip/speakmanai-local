@@ -120,7 +120,14 @@ mcp = FastMCP(
         "get_outputs returns the manifest only; get_output returns one agent's full content.\n\n"
         "get_outputs works on any past session_id - use it to resume downstream work across conversations.\n\n"
         "If a session is stuck or failed, call cancel_session(session_id) to free your concurrency slot.\n\n"
-        "If you lose a session_id (context reset, new conversation), call list_sessions() to recover it."
+        "If you lose a session_id (context reset, new conversation), call list_sessions() to recover it.\n\n"
+        "SKILLS: this server can also deliver skills, which are complete step-by-step instructions for "
+        "producing a finished deliverable from a workflow (for example a Solution Architecture Document, "
+        "a compliance report, requirements, a UX design, generated code). When the user asks for a "
+        "deliverable like that and your client does not already have a SPEAKMAN.AI skill installed for it, "
+        "call list_skills(), then get_skill(name), and follow the returned instructions exactly instead of "
+        "improvising the steps. If your client already has the skill installed (for example Claude Code "
+        "with /generate-sad), use the installed skill."
     )
 )
 
@@ -1309,6 +1316,58 @@ async def render_document(markdown: str, title: str = "", subtitle: str = "") ->
         return await render_document_local(markdown, title or None, subtitle or None)
     except Exception as e:
         raise RuntimeError(f"render_document failed: {str(e)}")
+
+
+# ─────────────────────────────────────────────
+# Tool 18: list_skills
+# ─────────────────────────────────────────────
+@mcp.tool(name="list_skills", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+async def list_skills() -> str:
+    """
+    List the SPEAKMAN.AI skills this server can deliver.
+
+    A skill is a complete set of step-by-step instructions for producing a finished deliverable,
+    for example running the architecture workflow and writing a Solution Architecture Document.
+    Call this when the user asks for a SPEAKMAN.AI deliverable and your client does not already
+    have a matching skill installed. Then call get_skill(name) for the one you need.
+
+    Returns:
+        JSON: skills_version and a list of {name, description}.
+    """
+    skills = await asyncio.to_thread(skills_installer.list_mcp_skills)
+    manifest = skills_installer.load_manifest() or {}
+    if not skills:
+        return json.dumps({"skills": [], "message": "This build of the server does not include any skills."})
+    return json.dumps({
+        "skills_version": manifest.get("version"),
+        "skills": skills,
+        "next_step": "Call get_skill(name) and follow the returned instructions exactly.",
+    }, indent=2)
+
+
+# ─────────────────────────────────────────────
+# Tool 19: get_skill
+# ─────────────────────────────────────────────
+@mcp.tool(name="get_skill", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+async def get_skill(name: str) -> str:
+    """
+    Get the full instructions for one SPEAKMAN.AI skill, with every file it bundles included.
+
+    Follow the returned instructions exactly, as you would a skill installed in your client.
+    Files the skill refers to (for example prompts/sad_agent_prompt.md) are included in the
+    same response under BUNDLED FILES, so nothing needs to be read from disk.
+
+    Args:
+        name: A skill name from list_skills (for example 'generate-sad').
+
+    Returns:
+        The skill instructions as plain text.
+    """
+    text = await asyncio.to_thread(skills_installer.get_mcp_skill, name)
+    if text is None:
+        available = [s["name"] for s in await asyncio.to_thread(skills_installer.list_mcp_skills)]
+        raise ValueError(f"Unknown skill '{name}'. Available skills: {', '.join(available) or 'none in this build'}.")
+    return text
 
 
 # ─────────────────────────────────────────────

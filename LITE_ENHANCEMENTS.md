@@ -414,6 +414,16 @@ Swept every skill in `speakmanai-cc` for references to `RE_DOMAIN_MODELER_V1` / 
 
 **Known limits:** the build takes whatever the `speakmanai-cc` checkout holds rather than a pinned tag. The skills are not installed on first run, only on a click. A user who edits a skill sees "update available" until they update, which replaces their edit (after backing it up). Skills removed from a later bundle are left installed.
 
+## ADDED (2026-10-13, experimental): skills served over MCP (`list_skills`, `get_skill`)
+
+**Why:** outside Claude Code, skills have to be uploaded by hand (17 uploads in Copilot Studio, a bundle in the Claude app). MCP has no way to install a skill, but every client that can run a workflow can call a tool, so the skill text can be delivered that way. This is a spike to learn whether an assistant will find and follow a skill it was never given as files (`V1_5_0_PLAN.md`, item 3).
+
+**What:** `tools/bundle_skills.py` also stages the `desktop-skills` variants (`org-plugins/speakmanai-sdlc/skills`) as `mcp-skills/`. Those are the ones written for clients with no local scripts. `list_skills` returns each skill's name and description. `get_skill(name)` returns one text: a short "how to use this" header, the skill instructions with the YAML frontmatter removed, then every bundled file inlined under its path (for example `prompts/sad_agent_prompt.md`), so nothing has to be read from disk. An unknown name is an error that lists the valid ones. The MCP server instructions gained a SKILLS paragraph telling a client to call these when the user asks for a deliverable and no skill is installed, and to prefer an installed skill when there is one. All added model-facing text is ASCII with no em or en dashes; the skill bodies themselves come from `speakmanai-cc` unchanged and do contain them.
+
+**Verified:** over real MCP (streamable HTTP) against the rebuilt unsigned exe: 19 tools listed, both new tools read-only, `list_skills` returns 17 skills at `1.4.0+b8c2ba3`, `get_skill('generate-sad')` returns about 22,000 characters including the inlined SAD prompt, and an unknown name returns an error. The largest skill (`pentest-execute`) is about 45,000 characters.
+
+**Not verified, and the point of the spike:** whether the Claude app or Copilot Studio calls these unprompted and follows the result. Also unverified: how clients treat the longer server instructions. `pentest`, `pentest-execute` and `generate-ux-design` rely on Claude Code features and are served anyway.
+
 ## CHANGED (2026-10-13): Claude 5.5 and GPT-6 tier defaults, Haiku output cap removed
 
 **What:** per-provider defaults are now Claude `claude-haiku-5-5` / `claude-sonnet-5-5` / `claude-opus-5-5` and OpenAI `gpt-6-luna` / `gpt-6.1-sol` / `gpt-6-astra` (fast / standard / advanced). Gemini and Vertex AI defaults are unchanged (`gemini-3.5-flash-lite` / `gemini-3.8-flash` / `gemini-3.1-pro-preview`). Touches `engine.py` (`MODEL_TIERS`, `_MODEL_TO_TIER`, `_ANTHROPIC_MAX_TOKENS`), `server.py` (setup page `MODELS` dropdowns, dead `_PROVIDER_MODELS`), `README.md`, `SETUP.md`. Older Claude and GPT-4o models stay selectable on the setup page; `claude-haiku-4-5-20251001` and the undated `claude-haiku-4-5` are removed everywhere.

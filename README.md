@@ -180,6 +180,8 @@ Switch modes at any time via the setup page or: *"Set execution mode to delegate
 | `cancel_session` | Cancel a stuck or failed session |
 | `update_session` | Revise one agent's output in a completed session and cascade the change through everything downstream — no re-run from scratch |
 | `set_execution_mode` | Switch between auto / force_delegate / force_background / delegate_only |
+| `list_skills` | List the skills the server can deliver (experimental, for assistants without installed skills) |
+| `get_skill` | Get one skill's full instructions with its bundled files inlined |
 | `import_architecture_plan` | Import a workflow JSON into the database |
 | `import_workflow` | Import a workflow definition only |
 | `import_agent` | Import or update a single agent |

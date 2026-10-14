@@ -84,6 +84,69 @@ def _classify(home: Path, manifest: dict, marker: dict) -> dict[str, str]:
     return result
 
 
+def _split_frontmatter(text: str) -> tuple[dict, str]:
+    """Return (frontmatter fields, body) for a SKILL.md. Only flat `key: value` lines are read."""
+    if not text.startswith("---"):
+        return {}, text
+    end = text.find("\n---", 3)
+    if end == -1:
+        return {}, text
+    fields = {}
+    for line in text[3:end].splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key.strip():
+            fields[key.strip()] = value.strip().strip('"')
+    return fields, text[end + 4:].lstrip("\n")
+
+
+def list_mcp_skills(bundle: Path | None = None) -> list[dict]:
+    """Skills the MCP server can hand out: name and description from each SKILL.md."""
+    bundle = bundle or bundle_dir()
+    manifest = load_manifest(bundle) or {}
+    skills = []
+    for name in sorted(manifest.get("mcp_skills", {})):
+        try:
+            fields, _ = _split_frontmatter((bundle / "mcp-skills" / name / "SKILL.md").read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        skills.append({"name": name, "description": fields.get("description", "")})
+    return skills
+
+
+def get_mcp_skill(name: str, bundle: Path | None = None) -> str | None:
+    """One skill as a single text: its instructions, then every file it bundles, inlined.
+    Returns None for a name the bundle does not have."""
+    bundle = bundle or bundle_dir()
+    manifest = load_manifest(bundle) or {}
+    files = manifest.get("mcp_skills", {}).get(name)
+    if not files:
+        return None
+    root = bundle / "mcp-skills" / name
+    _, body = _split_frontmatter((root / "SKILL.md").read_text(encoding="utf-8"))
+    extras = [f for f in files if f != "SKILL.md"]
+    parts = [
+        f"SKILL: {name} (SPEAKMAN.AI skills version {manifest.get('version')}, delivered over MCP)",
+        "",
+        "HOW TO USE THIS: follow the instructions under SKILL INSTRUCTIONS exactly, as you would a skill "
+        "installed in your client. This skill was not installed as files, so nothing exists on disk for it. "
+        + ("Where the instructions tell you to read a file bundled with the skill, use the copy under "
+           "BUNDLED FILES below, matched by its path. " if extras else "")
+        + "If you cannot save files, give the user each deliverable in your reply instead.",
+        "",
+        "===== SKILL INSTRUCTIONS =====",
+        body.rstrip(),
+    ]
+    if extras:
+        parts += ["", "===== BUNDLED FILES ====="]
+        for rel in extras:
+            try:
+                content = (root / rel).read_text(encoding="utf-8")
+            except Exception:
+                continue
+            parts += ["", f"----- FILE: {rel} -----", content.rstrip()]
+    return "\n".join(parts) + "\n"
+
+
 def status(home: Path | None = None, bundle: Path | None = None) -> dict:
     home = home or Path.home()
     manifest = load_manifest(bundle)

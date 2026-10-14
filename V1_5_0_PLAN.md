@@ -53,6 +53,7 @@ Copilot Studio needs a public URL (a tunnel), which makes it an enterprise fit. 
 
 Skills are not an MCP concept, so no client installs one from a server. The content can still be delivered:
 
+- **Built (2026-10-13):** `list_skills` and `get_skill(name)` serve all 17 skills from the `desktop-skills` variants, with bundled files inlined, and the server instructions point at them. Verified over real MCP from the exe. What remains is the part only a person can do: the test in the Claude app below.
 - Add `list_skills` and `get_skill(name)` tools, with prompt files inlined so the `ASSET_DIR` lookup disappears. Point the server instructions at them.
 - Test with `generate-sad` and one self-contained skill, first in the Claude app, then Copilot Studio if cheap.
 - Success means a user who has only added the MCP server can say "run the SAD workflow" and the model finds and follows the skill unprompted. If that is unreliable, the zip route stays as the supported path.

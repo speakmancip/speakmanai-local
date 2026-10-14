@@ -10,6 +10,7 @@ Reads a checkout of the speakmanai-cc repo (default: $SPEAKMANAI_CC_DIR, else a
 
     <out>/claude-code/skills/<skill>/...   the Claude Code skills (.claude/skills)
     <out>/claude-code/assets/prompts|templates/...
+    <out>/mcp-skills/<skill>/...           the desktop variants, served by get_skill
     <out>/downloads/*.zip                  bundles for manual clients, built by
                                            desktop-skills/build.ps1 in that checkout
     <out>/manifest.json                    version, commit and a sha256 per file
@@ -81,6 +82,15 @@ def main() -> int:
         if (cc / name).is_dir():
             _copy_tree(cc / name, cc_out / "assets" / name)
 
+    # The desktop variants are written for clients with no local scripts, so they are the
+    # ones the MCP server hands out through list_skills / get_skill.
+    mcp_src = cc / "desktop-skills" / "org-plugins" / "speakmanai-sdlc" / "skills"
+    mcp_out = out / "mcp-skills"
+    if mcp_src.is_dir():
+        _copy_tree(mcp_src, mcp_out)
+    else:
+        print(f"WARNING: {mcp_src} not found; get_skill will have nothing to serve.")
+
     downloads_out = out / "downloads"
     downloads_out.mkdir(parents=True)
     if not args.skip_zips:
@@ -118,11 +128,15 @@ def main() -> int:
         "skills": sorted(p.name for p in (cc_out / "skills").iterdir() if p.is_dir()),
         "claude_code": {p.relative_to(cc_out).as_posix(): _sha256(p) for p in sorted(cc_out.rglob("*")) if p.is_file()},
         "downloads": {p.name: _sha256(p) for p in sorted(downloads_out.iterdir()) if p.is_file()},
+        "mcp_skills": {
+            d.name: sorted(p.relative_to(d).as_posix() for p in d.rglob("*") if p.is_file())
+            for d in sorted(mcp_out.iterdir()) if d.is_dir() and (d / "SKILL.md").is_file()
+        } if mcp_out.is_dir() else {},
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     print(f"Skills bundle {version}: {len(manifest['skills'])} skills, {len(manifest['claude_code'])} files, "
-          f"{len(manifest['downloads'])} downloads -> {out}")
+          f"{len(manifest['downloads'])} downloads, {len(manifest['mcp_skills'])} MCP-served skills -> {out}")
     if dirty:
         print("WARNING: the speakmanai-cc checkout has uncommitted changes; the version is marked .dirty.")
     return 0
