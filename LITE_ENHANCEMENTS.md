@@ -470,3 +470,14 @@ Status dots start grey, not red, and the orange Vertex warning is a neutral note
 **List prices supplied with the change, USD per million tokens, input / output** (a snapshot, not read from any API): Opus 5.5 4.00 / 20.00; Sonnet 5.5 2.00 / 10.00; Haiku 5.5 0.10 / 0.50 ("from" prices); Gemini 3.1 Pro 2.00 / 12.00; Gemini 3.8 Flash 0.75 / 3.75; Gemini 3.5 Flash-Lite 0.30 / 2.50; gpt-6-astra 10.00 / 50.00; gpt-6.1-sol 2.00 / 10.00; gpt-6-luna 0.10 / 0.50.
 
 **Not covered:** saved configs that pin an old model keep using it (the engine passes an unknown pinned name through), so existing Claude and OpenAI users only move to the new defaults when they re-save on the setup page; only Gemini 2.x has a startup migration (`launcher.py`). Whether the GPT-6 models accept a `temperature` parameter is unconfirmed (`_call_llm` sends one to OpenAI).
+## FIXED (2026-10-14): the Claude app link drops the `session_id` argument
+
+**What happened:** in a Claude app chat linked to the local exe (the app's remote-devices bridge), `poll_workflow`, `get_outputs` and the other session tools failed with `1 validation error ... session_id Field required ... input_value={}`, while `list_sessions(limit)` and `get_skill(name)` worked. The user reported it had not happened on an earlier try, so it is probably a recent change in the app.
+
+**Diagnosis:** a throwaway tool took six differently named string arguments and reported which arrived. Called through the link with the same value for all six, five arrived (`sid`, `session`, `id`, `sessionid`, `thing`) and only `session_id` was dropped. The cause is the link, not the engine and not a general loss of arguments.
+
+**Fix:** the eight tools that take a session id (`poll_workflow`, `submit_response`, `get_outputs`, `get_output`, `cancel_session`, `update_session`, `get_project`, `generate_document`) now accept `sid` as well as `session_id`, and neither is marked required. `_need_session_id` in `server.py` takes whichever is present. With neither, the error says the client may be dropping `session_id` and to pass the same value as `sid`. Clients that send `session_id` are unaffected, so no skill or prompt changed. The diagnostic tool was removed before merging.
+
+**Verified:** over real MCP against a dev server, `session_id` only, `sid` only, both, and neither (clear error) on `poll_workflow`, and `get_outputs`, `cancel_session`, `get_output`, `submit_response` via `sid`; all eight tools list `sid` and none requires `session_id`. The diagnostic result above came from the unsigned `dist\spike-sid` exe in a linked Claude app chat.
+
+**Not verified:** a full workflow run through the linked Claude app using `sid`. Worth reporting to Anthropic that the link strips an argument named `session_id`.
