@@ -77,6 +77,12 @@ Skills are not an MCP concept, so no client installs one from a server. The cont
 - `executed_by` attribute on output events, so a run shows it was done by the user's tool. Today the audit trail is inferred from `MCP_PAUSE` events, the log and the `validation_skipped` events.
 - Carry-overs, none required: whether GPT-6 models accept `temperature`; saved configs that pin old models are not migrated; the startup `DEFAULT_MODEL` alias in `engine.py`; `seed_if_empty` never overwrites existing workflows; stuck delegate steps wait forever.
 
+## To do (owner asked for these to be parked, 2026-10-13)
+
+- **"Disconnect and remove" on the Claude Code panel.** Undo what Connect did: remove the user-scope MCP registration (`claude mcp remove speakmanai -s user`) and remove the skill files the exe installed. Use `installed.json` so only files we installed and the user has not changed are deleted; leave changed files, the user's own skills and extra files in place, and say what was left. Mention per-project registrations and the old `settings.json` entry, which this does not touch.
+- **"Reset all data".** A separate, explicit action that clears `~/.speakmanai` (config and keys, the database with sessions and the execution mode, the log), so the next launch is a first run. It deletes the user's sessions and keys, so it needs a clear confirmation and should not be bundled with Disconnect.
+- Until both exist, a manual clean-up is: quit the exe, delete or rename `~/.speakmanai`, run the `claude mcp remove` command, and delete the 17 skill folders in `~/.claude/skills` and `~/.claude/speakmanai-cc`.
+
 ## Test round (unsigned exe, local)
 
 Tier 1 and 2 must pass before release. Tier 3 is recorded either way.
