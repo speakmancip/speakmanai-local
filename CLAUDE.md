@@ -19,4 +19,4 @@ Use a spaced hyphen (` - `), a colon, or a comma instead. Write number ranges as
 LC_ALL=C grep -l -e $'\xe2\x80' -e $'\xc3\xa2' WorkflowsAndAgents/*.json
 ```
 
-Shipped workflow files only reach **new** installs. `seed_if_empty` never overwrites a workflow already in a user's database, so a prompt fix also has to be re-imported (`import_workflow` / `import_agent`) into any existing local database you test against.
+Shipped workflow files only reach **new** installs on their own. `seed_if_empty` never overwrites a workflow already in a user's database. An existing database picks up a prompt fix through the "Update workflows" button on the setup page (`workflows_sync.py`, which backs up what it replaces), or by re-importing (`import_workflow` / `import_agent`) into a local database you test against.

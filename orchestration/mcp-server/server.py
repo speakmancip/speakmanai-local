@@ -33,6 +33,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
 import skills_installer
+import workflows_sync
 from database import get_db, get_user_db, close as close_db
 from engine import (
     process_local_event,
@@ -1516,6 +1517,14 @@ async def lifespan(app: FastAPI):
     # Seed database on first launch if empty
     if os.environ.get("USE_SQLITE", "").lower() in ("true", "1", "yes"):
         await seed_if_empty()
+        try:
+            st = await workflows_sync.status(get_db(), _workflows_and_agents_dir())
+            if st["state"] == "differs":
+                names = ", ".join(d["workflowId"] for d in st["differs"])
+                log.warning(f"{len(st['differs'])} shipped workflow(s) differ from this version: {names}. "
+                            "Open the setup page to update them.")
+        except Exception as e:
+            log.warning(f"Could not check the workflows against this version: {e}")
     try:
         await _apply_fresh_install_mode()
     except Exception as e:
@@ -1886,6 +1895,28 @@ async def install_skills():
     return JSONResponse(result)
 
 
+@app.get("/api/workflows-status")
+async def workflows_status():
+    """Do the workflows in this database match the ones shipped in this build?"""
+    try:
+        return JSONResponse(await workflows_sync.status(get_db(), _workflows_and_agents_dir()))
+    except Exception as e:
+        log.warning(f"Workflow check failed: {e}")
+        return JSONResponse({"state": "unavailable", "total": 0, "differs": [], "message": f"Could not check the workflows: {e}"})
+
+
+@app.post("/api/update-workflows")
+async def update_workflows():
+    """Replace the shipped workflows that differ from this build. The replaced versions are backed up first."""
+    try:
+        result = await workflows_sync.apply(get_db(), _workflows_and_agents_dir(), Path.home() / ".speakmanai" / "backups")
+    except Exception as e:
+        log.warning(f"Workflow update failed: {e}")
+        return JSONResponse({"ok": False, "message": f"Workflow update failed: {e}"})
+    log.info(f"Workflow update: {result.get('message')}")
+    return JSONResponse(result)
+
+
 @app.get("/downloads/skills/{name}")
 async def download_skills_bundle(name: str):
     manifest = skills_installer.load_manifest() or {}
@@ -1958,6 +1989,8 @@ def _build_setup_html(cfg: dict) -> str:
   .btn-row {{ display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }}
   a.btn {{ text-decoration: none; }}
   .btn:disabled {{ opacity: 0.6; cursor: default; }}
+  .warn-box {{ margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: #1c1405; border: 1px solid #78350f; font-size: 0.8rem; color: #fcd34d; }}
+  .warn-box .btn {{ margin-top: 8px; }}
   .next-box {{ margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: #021a0d; border: 1px solid #14532d; font-size: 0.8rem; color: #a7f3d0; }}
   .steps {{ margin: 8px 0 4px 18px; font-size: 0.8rem; color: #94a3b8; }}
   .steps li {{ margin-bottom: 8px; }}
@@ -2068,6 +2101,11 @@ def _build_setup_html(cfg: dict) -> str:
       <div class="exec-hint">Not tested yet. Add this MCP server URL in Codex's MCP settings:</div>
       <div class="copy-row"><code class="mcp-url" id="mcp-url-codex"></code><button class="btn btn-outline btn-copy" onclick="copyText('mcp-url-codex')">Copy</button></div>
     </div>
+  </div>
+
+  <div class="warn-box" id="wf-box" style="display:none">
+    <div id="wf-text"></div>
+    <button class="btn btn-outline" id="wf-btn" onclick="updateWorkflows()">Update workflows</button>
   </div>
 
   <details class="fold" id="model-fold" {model_open}>
@@ -2306,6 +2344,36 @@ async function refreshSkillsStatus() {{
   btn.textContent = 'Update skills';
 }}
 
+// ---- Workflows ----
+async function refreshWorkflowsStatus() {{
+  const box = $('wf-box');
+  let st;
+  try {{ st = await (await fetch('/api/workflows-status')).json(); }} catch (e) {{ box.style.display = 'none'; return; }}
+  if (st.state !== 'differs') {{ box.style.display = 'none'; return; }}
+  const n = st.differs.length;
+  const retired = st.differs.reduce((s, d) => s + d.agents_retired.length, 0);
+  let text = n + ' of ' + st.total + ' workflows on this computer differ from this version. They may be older, ' +
+    'missing review gates, or edited. Updating replaces them with this version. The versions it replaces are saved ' +
+    'first in your .speakmanai/backups folder. Workflows you created under your own name are not touched.';
+  if (retired) text += ' ' + retired + ' agent link' + (retired === 1 ? '' : 's') + ' that this version no longer uses will be removed from the workflows.';
+  $('wf-text').textContent = text;
+  box.style.display = 'block';
+}}
+
+async function updateWorkflows() {{
+  const btn = $('wf-btn');
+  btn.disabled = true; btn.textContent = 'Updating...';
+  try {{
+    const r = await (await fetch('/api/update-workflows', {{ method: 'POST' }})).json();
+    showToast(r.message, !r.ok);
+  }} catch (e) {{
+    showToast('Could not update the workflows: ' + e, true);
+  }} finally {{
+    btn.disabled = false; btn.textContent = 'Update workflows';
+    refreshWorkflowsStatus();
+  }}
+}}
+
 // ---- Model API ----
 function setProvider(p) {{
   currentProvider = p;
@@ -2460,6 +2528,7 @@ setProvider(currentProvider);
 renderRunner();
 refreshAssistantStatus();
 refreshSkillsStatus();
+refreshWorkflowsStatus();
 </script>
 </body>
 </html>"""

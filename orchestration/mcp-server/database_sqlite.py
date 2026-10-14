@@ -479,6 +479,10 @@ class SQLiteCollection:
         for k, v in update.get("$set", {}).items():
             doc[k] = v.isoformat() if isinstance(v, datetime) else v
 
+        # $unset
+        for key in update.get("$unset", {}):
+            doc.pop(key, None)
+
         # $addToSet
         for key, value in update.get("$addToSet", {}).items():
             current = doc.get(key, [])
