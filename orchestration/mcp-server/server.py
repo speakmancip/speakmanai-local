@@ -1911,7 +1911,12 @@ def _build_setup_html(cfg: dict) -> str:
   <div class="brand">SPEAKMAN.AI</div>
   <p class="subtitle">Run multi-agent workflows through the AI assistant you already use. No API key needed to start.</p>
 
-  <div class="section">
+  <div class="note" id="mode-warning" style="display:none; margin-bottom:20px">
+    No model API is set up, but this install is set to run AI steps on one, so those steps will fail.
+    <div class="btn-row"><button class="btn btn-outline" onclick="chooseRunner('assistant')">Let my assistant run the steps</button></div>
+  </div>
+
+  <div class="section" id="runner-section" style="display:none">
     <h2>Who runs the AI steps?</h2>
     <div class="choice-group">
       <div class="choice" id="choice-assistant" onclick="chooseRunner('assistant')">
@@ -1994,7 +1999,7 @@ def _build_setup_html(cfg: dict) -> str:
 
   <details class="fold" id="model-fold" {model_open}>
     <summary>Model API <span class="opt">optional</span><span class="fold-state" id="model-state"></span></summary>
-    <div class="exec-hint">Not needed when your assistant runs the steps. Add one to run steps in the background and to have outputs checked by validators.</div>
+    <div class="exec-hint" id="model-hint"></div>
 
     <div class="section" style="margin-top:14px">
       <div class="radio-group" id="provider-group">
@@ -2079,26 +2084,31 @@ const MCP_URL = 'http://localhost:' + MCP_PORT + '/mcp';
 let currentProvider = '{provider}';
 let modelConfigured = {configured_js};
 let execMode = '{saved_exec}';
-// Set when the user picks "My own model API" before one is set up: the next successful
-// save of model settings then switches the mode.
-let wantsModelApi = false;
+// Adding a first model API is a request to use it. Editing an existing one is not.
+const CONFIGURED_AT_LOAD = modelConfigured;
 
 const $ = id => document.getElementById(id);
 
 // ---- Who runs the AI steps ----
 function renderRunner() {{
   const assistant = execMode === 'delegate_only' || execMode === 'force_delegate';
-  $('choice-assistant').classList.toggle('active', assistant && !wantsModelApi);
-  $('choice-model').classList.toggle('active', !assistant || wantsModelApi);
+  // The choice, and the mode list under Advanced, only appear when there is something to
+  // choose between. With no model API the assistant runs the steps and that is all.
+  $('runner-section').style.display = modelConfigured ? 'block' : 'none';
+  $('adv-fold').style.display = (modelConfigured || !assistant) ? '' : 'none';
+  $('mode-warning').style.display = (!modelConfigured && !assistant) ? 'block' : 'none';
+  $('choice-assistant').classList.toggle('active', assistant);
+  $('choice-model').classList.toggle('active', !assistant);
   let hint;
-  if (wantsModelApi && !modelConfigured) hint = 'Add a model API below and save. Until then your assistant keeps running the AI steps.';
-  else if (execMode === 'delegate_only') hint = 'Your connected assistant runs every AI step. No model API is called' + (modelConfigured ? ', and your saved model settings are kept.' : '.');
+  if (execMode === 'delegate_only') hint = 'Your connected assistant runs every AI step. No model API is called, and your saved model settings are kept.';
   else if (execMode === 'force_delegate') hint = 'Your connected assistant runs every AI step. Validators still use your model API. (Force Delegate, set under Advanced.)';
   else if (execMode === 'force_background') hint = 'Every step runs on your model API. (Force Background, set under Advanced.)';
-  else if (modelConfigured) hint = 'AI steps run on your model API (' + (PROVIDER_NAMES[SAVED_PROVIDER] || SAVED_PROVIDER) + '). Steps a workflow marks for your assistant still go to your assistant.';
-  else hint = 'No model API is set up, so background steps will fail. Choose "My AI assistant", or add a model API below.';
+  else hint = 'AI steps run on your model API (' + (PROVIDER_NAMES[SAVED_PROVIDER] || SAVED_PROVIDER) + '). Steps a workflow marks for your assistant still go to your assistant.';
   $('runner-hint').textContent = hint;
   $('model-state').textContent = modelConfigured ? (PROVIDER_NAMES[SAVED_PROVIDER] || SAVED_PROVIDER) : 'not set';
+  $('model-hint').textContent = modelConfigured
+    ? 'Used when AI steps run on your own model API, and by validators.'
+    : 'Not needed: your assistant runs the AI steps. Add one if you want steps to run in the background on your own provider.';
   $('exec-mode').value = execMode;
   updateExecHint();
 }}
@@ -2112,19 +2122,8 @@ async function postConfig(body) {{
 }}
 
 async function chooseRunner(which) {{
-  if (which === 'assistant') {{
-    wantsModelApi = false;
-    const d = await postConfig({{ execution_mode: 'delegate_only' }});
-    showToast(d.ok ? 'Your assistant now runs the AI steps.' : d.message, !d.ok);
-  }} else if (modelConfigured) {{
-    wantsModelApi = false;
-    const d = await postConfig({{ use_model_api: true }});
-    showToast(d.message, !d.ok);
-  }} else {{
-    wantsModelApi = true;
-    $('model-fold').open = true;
-    $('model-fold').scrollIntoView({{ behavior: 'smooth', block: 'start' }});
-  }}
+  const d = await postConfig(which === 'assistant' ? {{ execution_mode: 'delegate_only' }} : {{ use_model_api: true }});
+  showToast(d.ok ? (which === 'assistant' ? 'Your assistant now runs the AI steps.' : d.message) : d.message, !d.ok);
   renderRunner();
 }}
 
@@ -2323,13 +2322,12 @@ async function saveConfig() {{
     body.standard_model  = $('standard-model').value;
     body.advanced_model  = $('advanced-model').value;
   }}
-  // Saving model settings does not change who runs the steps, unless the user asked for
-  // their own model API above. The server only switches once an API is really set up.
-  if (wantsModelApi) body.use_model_api = true;
+  // Setting up a first model API switches AI steps to it (the server only does so once an
+  // API is really set up). Editing an existing one leaves who-runs-the-steps alone.
+  if (!CONFIGURED_AT_LOAD) body.use_model_api = true;
   const d = await postConfig(body);
   if (d.ok) {{
     if ($('api-key').value) {{ HAS_KEY[p] = true; $('api-key').value = ''; }}
-    if (execMode === 'auto') wantsModelApi = false;
     let msg = d.message;
     if (!body.use_model_api && (execMode === 'delegate_only') && modelConfigured) msg = 'Model settings saved. Your assistant still runs the AI steps. Choose "My own model API" at the top to use this model.';
     showToast(msg);
@@ -2353,7 +2351,6 @@ function updateExecHint() {{
 
 async function saveMode() {{
   const mode = $('exec-mode').value;
-  wantsModelApi = false;
   const d = await postConfig({{ execution_mode: mode }});
   const needsApi = (mode === 'auto' || mode === 'force_background') && !modelConfigured;
   showToast(d.ok ? (needsApi ? 'Mode applied, but no model API is set up, so those steps will fail.' : 'Mode applied.') : d.message, !d.ok || needsApi);

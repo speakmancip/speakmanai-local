@@ -441,21 +441,21 @@ Swept every skill in `speakmanai-cc` for references to `RE_DOMAIN_MODELER_V1` / 
 **Why:** the page opened on "Choose your AI provider" with a key field and three model dropdowns, which told a new user they needed an API key. The one action most people need, connecting Claude Code, sat two-thirds of the way down as a secondary button, above a raw command, five zip links and a paragraph about tunnels.
 
 **Page (`server.py` `_build_setup_html`):** top to bottom it is now:
-- **Who runs the AI steps?** Two large choices: "My AI assistant" (no API key) and "My own model API". This is the execution mode in plain words, and it is first because it is the default a new user is now given.
+- **Who runs the AI steps?** Two large choices: "My AI assistant" (no API key) and "My own model API". This is the execution mode in plain words. It is shown only when a model API is set up, because without one there is nothing to choose: a fresh install shows no mode controls at all.
 - **Connect your AI assistant.** A picker (Claude Code, Claude app, Copilot Studio, Cursor, Codex). Selecting one shows only its steps. Claude Code shows whether it was found and whether it is connected, with one primary button. When Claude Code is not installed the button is replaced by "not found", an install link and "Check again". The manual command sits under "Do it by hand". `?assistant=<id>` in the URL selects a panel.
 - **Model API (optional).** Collapsed unless a model API is already set up.
-- **Advanced.** The four-way execution mode dropdown.
+- **Advanced.** The four-way execution mode dropdown. Hidden when no model API is set up and the assistant is running the steps, for the same reason. If an install has no model API but is in a mode that needs one, a notice appears at the top with a "Let my assistant run the steps" button, and Advanced is shown.
 
 Status dots start grey, not red, and the orange Vertex warning is a neutral note.
 
 **Mode rules (`server.py`):**
 - `_apply_fresh_install_mode` runs at startup: if no execution mode has ever been chosen and no model API is set up, the mode is set to `delegate_only`. An install with a key, or one that has chosen a mode, is left alone.
 - Connecting Claude Code with no model API set up and the mode on `auto` also switches to `delegate_only`.
-- The mode only becomes `auto` from the page when a model API really is set up. `POST /api/config` takes `use_model_api: true` as a request: the server switches to `auto` if an API is configured, and otherwise leaves the mode alone and says so. Picking "My own model API" with nothing set up opens the Model API section, and the switch happens on the save that sets one up.
-- Saving model settings no longer changes the mode by itself. Before, every save posted the dropdown's mode along with the provider.
+- The mode only becomes `auto` from the page when a model API really is set up. `POST /api/config` takes `use_model_api: true` as a request: the server switches to `auto` if an API is configured, and otherwise leaves the mode alone and says so.
+- Setting up a first model API sends that request, so adding a model switches AI steps to it and the two choices appear with "My own model API" selected. Editing the settings of an install that already had a model API does not change the mode. Before, every save posted the dropdown's mode along with the provider.
 - New read-only `GET /api/assistant-status` reports whether Claude Code was found and registered (it reads `~/.claude.json`), whether a model API is set up, and the mode.
 
-**Verified:** scratch tests with a fake home: a fresh install starts in `delegate_only`; asking for the model API with none set up leaves the mode alone; saving a key without asking leaves it alone; asking once a key exists switches to `auto`; switching back keeps the key; editing model settings in delegate mode stays in delegate mode; an install with a key stays on `auto`; an explicit `auto` with no key is kept at startup and switched on connect. Headless screenshots of a fresh install with and without Claude Code, and of the rebuilt exe on the dev machine (connected, Vertex AI, three assistant panels). **Not verified:** clicking through the page by hand. The buttons were exercised through their endpoints, not a browser.
+**Verified:** scratch tests with a fake home: a fresh install starts in `delegate_only`; asking for the model API with none set up leaves the mode alone; saving a key without asking leaves it alone; asking once a key exists switches to `auto`; switching back keeps the key; editing model settings in delegate mode stays in delegate mode; an install with a key stays on `auto`; an explicit `auto` with no key is kept at startup and switched on connect. Headless screenshots and rendered-DOM checks of a fresh install with and without Claude Code (no mode controls shown), the no-API-but-auto case (notice and Advanced shown), the state after a first model API save (choices and Advanced shown, mode `auto`), and the rebuilt exe on the dev machine (connected, Vertex AI, three assistant panels). **Not verified:** clicking through the page by hand. The buttons were exercised through their endpoints, not a browser.
 
 ## CHANGED (2026-10-13): Claude 5.5 and GPT-6 tier defaults, Haiku output cap removed
 

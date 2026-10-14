@@ -243,11 +243,11 @@ Config is stored at `~/.speakmanai/config.json`. The SQLite database is at `~/.s
 All modes expose a setup UI at `http://localhost:8000/setup`.
 
 Use it to:
-- Choose who runs the AI steps: your connected assistant (no API key) or your own model API. Choosing your own model API only takes effect once one is set up
+- Choose who runs the AI steps: your connected assistant (no API key) or your own model API. The choice appears once a model API is set up; before that your assistant runs them and there is nothing to choose. Adding a first model API switches to it
 - Connect your assistant: pick it from the list to see its steps. Claude Code is one click; the Claude app, Copilot Studio, Cursor and Codex are manual
 - Pick your AI provider (Gemini, Claude, OpenAI, Vertex AI, Ollama), under **Model API**, which is optional
 - Enter your API key (or GCP project/region for Vertex AI, which uses Application Default Credentials instead) and choose fast / standard / advanced models
-- Set the execution mode directly, under **Advanced**
+- Set the execution mode directly, under **Advanced** (shown once a model API is set up)
 - Connect your AI assistant (one click for Claude Code; a copyable MCP URL for the others)
 
 ### Execution Modes
