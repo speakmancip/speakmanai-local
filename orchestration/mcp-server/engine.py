@@ -961,13 +961,21 @@ async def _handle_start(event: dict, queue: asyncio.Queue):
             "workflow_definition": workflow_def,
             "execution_context": {
                 "session_id": session_id,
+                # The planner's output, as far as every other agent is concerned, is the user's
+                # request and nothing else - the same whether the planner ran on the model API
+                # or was delegated.
                 "source_outputs": {
                     "source_agent_id": planner_agent_id,
-                    "content": user_content if is_planner_delegated and workflow_type != "system" else prompt
+                    "content": prompt
                 }
             }
         }
     }
+    if is_planner_delegated and workflow_type != "system":
+        # A delegated planner needs the workflow description and agent list to build the plan.
+        # Kept apart from source_outputs so it reaches the planner's own pause only, and is not
+        # repeated to every later agent that depends on the planner.
+        initial_event["data"]["execution_context"]["planner_input"] = user_content
 
     # Log event via our integrated logger
     await _log_event_to_db(session_id, initial_event, db)

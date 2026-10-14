@@ -617,11 +617,13 @@ async def _get_mcp_pause_config(doc: dict) -> dict | None:
     elif exec_mode == "auto" and a_exec_mode == "delegate" and agent_type.startswith("AI_"):
         agent_type = "MCP_LLM_DELEGATE"
 
-    context = _compile_dependencies_context(agent_doc, events)
+    pause_exec_ctx = mcp_pause_event.get("data", {}).get("execution_context", {}) if mcp_pause_event else {}
+    # A delegated planner's pause carries its own input (workflow description, agent list and
+    # the user's request). Every other pause gets its declared dependencies.
+    context = pause_exec_ctx.get("planner_input") or _compile_dependencies_context(agent_doc, events)
 
     # If this pause is a re-prompt after a failed validation or a human "Update" decision,
     # surface the prior attempt and the reviewer's feedback so the delegate can revise its answer.
-    pause_exec_ctx = mcp_pause_event.get("data", {}).get("execution_context", {}) if mcp_pause_event else {}
     validation_feedback = pause_exec_ctx.get("validation_feedback")
     hitl_feedback = pause_exec_ctx.get("hitl_feedback")
     update_feedback = pause_exec_ctx.get("update_feedback")
