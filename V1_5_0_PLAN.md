@@ -91,7 +91,7 @@ Skills are not an MCP concept, so no client installs one from a server. The cont
 
 Tier 1 and 2 must pass before release. Tier 3 is recorded either way.
 
-1. Clean Windows machine, no API key: install, check the skills are in place and the setup page shows the mode switch.
+1. Clean Windows machine, no API key, ideally with the signed exe (see Release): install, check the skills are in place and the setup page shows no mode controls with the mode on `delegate_only`. Run a short workflow from Claude Code: no model call in the log and validators show `validation_skipped`. Add a model key: the controls appear, the mode moves to `auto` and validators run. Switch back to `delegate_only` and confirm the keyless behavior again. This is the one mode-switch check on the signed build.
 2. Registration: run the one-click or pasted command, then `claude mcp list` from an unrelated directory.
 3. One short workflow end to end in delegate mode from Claude Code, then from the Claude app. The tool must run the planner and every agent.
 4. Zero platform-funded model calls: check the engine log and the Vertex billing line.
@@ -106,7 +106,7 @@ Tier 1 and 2 must pass before release. Tier 3 is recorded either way.
 
 1. Build and test locally on `release/v1.5.0`. No release for testing.
 2. Just before live testing with outside users: PR, merge, tag `v1.5.0`, signed exe (the signing script needs an interactive `az login`), GitHub release.
-3. Re-run the mode-switch check once in the signed build.
+3. Run the clean-machine install test (test round item 1) with the signed build.
 
 ## Risks
 
