@@ -2283,10 +2283,10 @@ async function refreshAssistantStatus(announce) {{
     btn.className = 'btn btn-primary';
   }} else if (cc.detected) {{
     $('cc-dot').className = 'status-dot warn';
-    $('cc-status').textContent = 'Claude Code settings found, but not the claude command that Connect needs.';
+    $('cc-status').textContent = 'Claude Code CLI was not found on this computer.';
   }} else {{
     $('cc-dot').className = 'status-dot warn';
-    $('cc-status').textContent = 'Claude Code was not found on this computer.';
+    $('cc-status').textContent = 'Claude Code CLI was not found on this computer.';
   }}
   modelConfigured = st.model_api_configured;
   execMode = st.execution_mode;
