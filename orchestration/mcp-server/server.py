@@ -132,6 +132,41 @@ mcp = FastMCP(
 )
 
 # ─────────────────────────────────────────────
+# Session id handling
+# ─────────────────────────────────────────────
+def _need_session_id(session_id: str = "", sid: str = "") -> str:
+    """Accept the session id under either name. Some clients drop an argument named session_id
+    before the call reaches this server, so every tool that takes one also accepts sid."""
+    value = (session_id or sid or "").strip()
+    if not value:
+        log.warning("Tool call arrived with no session id under either session_id or sid.")
+        raise ValueError(
+            "No session id received. Pass the session id as session_id. If your client drops "
+            "arguments named session_id, pass the same value as sid instead."
+        )
+    return value
+
+
+@mcp.tool(name="spike_echo_args", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+async def spike_echo_args(session_id: str = "", sid: str = "", session: str = "", id: str = "", sessionid: str = "", thing: str = "") -> str:
+    """
+    Diagnostic only. Reports which of these arguments the client actually delivered.
+    Call it once with the same short value (for example 'abc') for every argument.
+
+    Args:
+        session_id: test value
+        sid: test value
+        session: test value
+        id: test value
+        sessionid: test value
+        thing: test value
+    """
+    received = {k: v for k, v in {"session_id": session_id, "sid": sid, "session": session, "id": id, "sessionid": sessionid, "thing": thing}.items() if v}
+    log.info(f"spike_echo_args received: {received}")
+    return json.dumps({"received": received, "dropped": [k for k in ("session_id", "sid", "session", "id", "sessionid", "thing") if k not in received]})
+
+
+# ─────────────────────────────────────────────
 # Tool 1: list_workflows
 # ─────────────────────────────────────────────
 @mcp.tool(name="list_workflows", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
@@ -228,8 +263,9 @@ async def start_session(
 # ─────────────────────────────────────────────
 @mcp.tool(name="submit_response", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
 async def submit_response(
-    session_id: str,
     response: str,
+    session_id: str = "",
+    sid: str = "",
     pause_id: str = "",
 ) -> str:
     """
@@ -246,12 +282,14 @@ async def submit_response(
 
     Args:
         session_id: The session_id from start_session
+        sid:        Same as session_id. Use it only if your client drops arguments named session_id.
         response:   Your response as a string (JSON-encoded array/object for structured inputs)
         pause_id:   input_required.pause_id from the poll_workflow call you're answering.
                     Optional, but always pass it: it guarantees your response is applied to the
                     pause you actually read, and is rejected if the workflow has since moved on
                     (e.g. a repeated submit would otherwise land on the NEXT pause).
     """
+    session_id = _need_session_id(session_id, sid)
     if not response or not response.strip():
         raise ValueError("response must be a non-empty string.")
     if len(response) > 50000:
@@ -357,17 +395,19 @@ async def submit_response(
 # Tool 5: poll_workflow
 # ─────────────────────────────────────────────
 @mcp.tool(name="poll_workflow", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
-async def poll_workflow(session_id: str, mcp_ctx: Context) -> str:
+async def poll_workflow(mcp_ctx: Context, session_id: str = "", sid: str = "") -> str:
     """
     Check the status of a running workflow and retrieve outputs when complete.
 
     Args:
         session_id: The session_id returned by start_session
+        sid:        Same as session_id. Use it only if your client drops arguments named session_id.
 
     Returns:
         status (IN_PROGRESS | AWAITING_CAPABILITIES | COMPLETED | FAILED),
         completed_steps list, and outputs dict keyed by agent_id when COMPLETED.
     """
+    session_id = _need_session_id(session_id, sid)
     db = get_db(os.environ.get("RAW_EVENTS_DB_NAME", "speakmanai_db"))
     COLLECTION = os.environ.get("RAW_EVENTS_COLLECTION", "events_raw")
 
@@ -731,7 +771,7 @@ def _aggregate_agent_index(events: list, human_agents: set) -> dict:
 # Tool 6: get_outputs  (manifest — no content)
 # ─────────────────────────────────────────────
 @mcp.tool(name="get_outputs", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
-async def get_outputs(session_id: str, mcp_ctx: Context) -> str:
+async def get_outputs(mcp_ctx: Context, session_id: str = "", sid: str = "") -> str:
     """
     Return the manifest of available agent outputs for a completed workflow session.
     Does NOT return content - call get_output(session_id, agent_id) for each output you need.
@@ -740,12 +780,14 @@ async def get_outputs(session_id: str, mcp_ctx: Context) -> str:
 
     Args:
         session_id: The session_id from start_session or poll_workflow
+        sid:        Same as session_id. Use it only if your client drops arguments named session_id.
 
     Returns:
         Session metadata, list of available outputs (agent_id, description, mime_type, index),
         document_capabilities, and suggested next steps.
         Use get_output(session_id, agent_id) to fetch the full content of each output.
     """
+    session_id = _need_session_id(session_id, sid)
     db = get_db(os.environ.get("RAW_EVENTS_DB_NAME", "speakmanai_db"))
     COLLECTION = os.environ.get("RAW_EVENTS_COLLECTION", "events_raw")
 
@@ -821,19 +863,21 @@ async def get_outputs(session_id: str, mcp_ctx: Context) -> str:
 # Tool 7: get_output  (single agent content)
 # ─────────────────────────────────────────────
 @mcp.tool(name="get_output", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
-async def get_output(session_id: str, agent_id: str) -> str:
+async def get_output(agent_id: str, session_id: str = "", sid: str = "") -> str:
     """
     Retrieve the full content of one agent output from a workflow session.
     Call get_outputs(session_id) first to get the list of available agent_ids.
 
     Args:
         session_id: The session_id from start_session or poll_workflow
+        sid:        Same as session_id. Use it only if your client drops arguments named session_id.
         agent_id:   The agent_id from get_outputs available_outputs list
                     (e.g. 'MCP_TECHNICAL_WRITER_V2', 'MCP_COMPLIANCE_OFFICER_V2')
 
     Returns:
         agent_id, description, mime_type, and the full content string for that agent.
     """
+    session_id = _need_session_id(session_id, sid)
     db = get_db(os.environ.get("RAW_EVENTS_DB_NAME", "speakmanai_db"))
     COLLECTION = os.environ.get("RAW_EVENTS_COLLECTION", "events_raw")
 
@@ -947,7 +991,7 @@ async def list_sessions(limit: int = 10) -> str:
 # Tool 9: cancel_session
 # ─────────────────────────────────────────────
 @mcp.tool(name="cancel_session", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True))
-async def cancel_session(session_id: str) -> str:
+async def cancel_session(session_id: str = "", sid: str = "") -> str:
     """
     Cancel a running or stalled workflow session and free your concurrency slot.
 
@@ -956,10 +1000,12 @@ async def cancel_session(session_id: str) -> str:
 
     Args:
         session_id: The session_id to cancel
+        sid:        Same as session_id. Use it only if your client drops arguments named session_id.
 
     Returns:
         Confirmation that the session was marked CANCELLED and the concurrency slot freed.
     """
+    session_id = _need_session_id(session_id, sid)
     db = get_db(os.environ.get("RAW_EVENTS_DB_NAME", "speakmanai_db"))
     COLLECTION = os.environ.get("RAW_EVENTS_COLLECTION", "events_raw")
 
@@ -991,7 +1037,7 @@ async def cancel_session(session_id: str) -> str:
 # Tool: update_session
 # ─────────────────────────────────────────────
 @mcp.tool(name="update_session", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
-async def update_session(session_id: str, agent_id: str, update_content: str) -> str:
+async def update_session(agent_id: str, update_content: str, session_id: str = "", sid: str = "") -> str:
     """
     Revise one agent's output in an already-finished workflow session and cascade the change
     through every downstream agent that depends on it.
@@ -1001,12 +1047,14 @@ async def update_session(session_id: str, agent_id: str, update_content: str) ->
 
     Args:
         session_id: The session_id of a COMPLETED or CANCELLED session (from list_sessions).
+        sid:        Same as session_id. Use it only if your client drops arguments named session_id.
         agent_id:   The agent whose output to revise - an agent_id from get_outputs' available_outputs.
         update_content: What should change, in your own words.
 
     Returns:
         Confirmation the cascade has started - poll_workflow(session_id) exactly like a fresh run.
     """
+    session_id = _need_session_id(session_id, sid)
     if not agent_id or not agent_id.strip():
         raise ValueError("agent_id must be a non-empty string.")
     if not update_content or not update_content.strip():
@@ -1091,7 +1139,7 @@ async def list_projects() -> str:
 # Tool 12: get_project
 # ─────────────────────────────────────────────
 @mcp.tool(name="get_project", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
-async def get_project(session_id: str) -> str:
+async def get_project(session_id: str = "", sid: str = "") -> str:
     """
     Get a specific project with its section manifest and available on-demand operations.
 
@@ -1104,7 +1152,9 @@ async def get_project(session_id: str) -> str:
 
     Args:
         session_id: The session_id from list_projects or start_session
+        sid:        Same as session_id. Use it only if your client drops arguments named session_id.
     """
+    session_id = _need_session_id(session_id, sid)
     try:
         return await get_project_local(session_id)
     except ValueError as e:
@@ -1272,7 +1322,7 @@ async def import_agent(agent_json: str) -> str:
 # Tool 13: generate_document
 # ─────────────────────────────────────────────
 @mcp.tool(name="generate_document", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False))
-async def generate_document(session_id: str, format: str = "document") -> str:
+async def generate_document(session_id: str = "", sid: str = "", format: str = "document") -> str:
     """
     Assemble workflow sections into a formatted document via AI.
     The result is cached in the project record - subsequent calls regenerate it.
@@ -1282,12 +1332,14 @@ async def generate_document(session_id: str, format: str = "document") -> str:
 
     Args:
         session_id: The session_id of the completed project
+        sid:        Same as session_id. Use it only if your client drops arguments named session_id.
         format:     Document format hint for the assembler, e.g. "document",
                     "executive_summary", "sad", "report" (default: "document")
 
     Returns:
         The assembled document as a Markdown string, plus session_id and format.
     """
+    session_id = _need_session_id(session_id, sid)
     try:
         return await generate_document_local(session_id, format)
     except Exception as e:
