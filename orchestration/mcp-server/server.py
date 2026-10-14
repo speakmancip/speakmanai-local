@@ -2057,24 +2057,28 @@ def _build_setup_html(cfg: dict) -> str:
         <div class="exec-hint" id="cc-hint">One click: registers this server for all your projects and installs the skills.</div>
       </div>
       <div id="cc-missing" style="display:none">
-        <div class="exec-hint">Install the Claude Code command line tool: paste this into PowerShell.</div>
-        <div class="copy-row"><code id="cc-install-cmd">irm https://claude.ai/install.ps1 | iex</code><button class="btn btn-outline btn-copy" onclick="copyText('cc-install-cmd')">Copy</button></div>
-        <div class="exec-hint">Then run <code>claude</code> once. It opens your browser so you can sign in. Then press Check again. The Claude app on its own does not include this command.</div>
-        <div class="btn-row">
+        <div class="btn-row" style="margin-top:0">
+          <button class="btn btn-primary" style="width:auto" onclick="refreshAssistantStatus(true)">Check again</button>
           <a class="btn btn-outline" href="https://code.claude.com/docs/en/overview" target="_blank" rel="noopener">Official install steps</a>
-          <button class="btn btn-outline" onclick="refreshAssistantStatus(true)">Check again</button>
         </div>
+        <ol class="steps">
+          <li>Paste this into PowerShell:
+            <div class="copy-row"><code id="cc-install-cmd">irm https://claude.ai/install.ps1 | iex</code><button class="btn btn-outline btn-copy" onclick="copyText('cc-install-cmd')">Copy</button></div></li>
+          <li>Run <code>claude</code> once and sign in when your browser opens.</li>
+          <li>Press Check again.</li>
+        </ol>
       </div>
-      <div id="cc-path" style="display:none">
-        <div class="exec-hint">If Windows says <code>claude</code> is not recognized, the installer did not add it to your PATH. Run it by its full path:</div>
+      <div class="next-box" id="cc-next" style="display:none">Next: open Claude Code in any folder and type <code>/generate-sad</code>. Restart it first if it was already open.<br>Using the chat side of the Claude app? Use the Claude app tab above.</div>
+      <div class="exec-hint" id="skills-status"></div>
+      <button class="btn btn-outline" id="skills-btn" onclick="installSkills()" style="display:none; margin-top:6px;">Install skills for Claude Code</button>
+      <details class="sub" id="cc-path" style="display:none">
+        <summary><code>claude</code> not recognized in a terminal?</summary>
+        <div class="exec-hint">The installer did not add it to your PATH. Connecting from this page works either way. To run it by its full path:</div>
         <div class="copy-row"><code id="cc-path-run">&amp; "$env:USERPROFILE\\.local\\bin\\claude.exe"</code><button class="btn btn-outline btn-copy" onclick="copyText('cc-path-run')">Copy</button></div>
         <div class="exec-hint">Or add it to PATH once, then open a new terminal:</div>
         <div class="copy-row"><code id="cc-path-add">[Environment]::SetEnvironmentVariable("Path", $env:Path + ";$env:USERPROFILE\\.local\\bin", "User")</code><button class="btn btn-outline btn-copy" onclick="copyText('cc-path-add')">Copy</button></div>
-        <div class="exec-hint">Connecting from this page works either way. <a href="https://code.claude.com/docs/en/troubleshoot-install#command-not-found-claude-after-installation" target="_blank" rel="noopener">Anthropic's PATH help</a></div>
-      </div>
-      <div class="next-box" id="cc-next" style="display:none">Next: open Claude Code in any folder and type <code>/generate-sad</code>, or ask it to list the SPEAKMAN.AI workflows. If Claude Code was already open, restart it first. This covers Claude Code, including the Claude Code part of the Claude app. The chat side of the Claude app has its own settings: use the Claude app tab above.</div>
-      <div class="exec-hint" id="skills-status"></div>
-      <button class="btn btn-outline" id="skills-btn" onclick="installSkills()" style="display:none; margin-top:6px;">Install skills for Claude Code</button>
+        <div class="exec-hint"><a href="https://code.claude.com/docs/en/troubleshoot-install#command-not-found-claude-after-installation" target="_blank" rel="noopener">Anthropic's PATH help</a></div>
+      </details>
       <details class="sub" id="cc-manual">
         <summary>Do it by hand</summary>
         <div class="exec-hint">Run this in a terminal, then restart Claude Code:</div>
@@ -2263,7 +2267,7 @@ async function refreshAssistantStatus(announce) {{
   const cc = st.claude_code;
   $('cc-ready').style.display = cc.detected ? 'block' : 'none';
   $('cc-missing').style.display = cc.cli_found ? 'none' : 'block';
-  $('cc-path').style.display = cc.windows && !cc.cli_on_path ? 'block' : 'none';
+  $('cc-path').style.display = cc.windows && cc.cli_found && !cc.cli_on_path && !cc.registered ? 'block' : 'none';
   $('cc-next').style.display = cc.registered ? 'block' : 'none';
   $('cc-hint').style.display = cc.registered ? 'none' : 'block';
   const btn = $('cc-connect');
