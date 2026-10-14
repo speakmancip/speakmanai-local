@@ -436,6 +436,27 @@ Swept every skill in `speakmanai-cc` for references to `RE_DOMAIN_MODELER_V1` / 
 
 **Not changed:** the larger share of the payload, which is upstream agent outputs re-sent to later steps and review pauses. That is the design: each pause is self-contained so a different tool or a compacted conversation can pick it up. Also not changed: clients that read the structured form of a `str` tool result see the context JSON-escaped twice (about 28% larger). FastMCP's `structured_output` flag might avoid it, but it changes what every client receives and was only observable in Claude Code, so it is left alone until it can be tested across tools.
 
+## CHANGED (2026-10-13): setup page reorganised, and a fresh install defaults to Delegate Only
+
+**Why:** the page opened on "Choose your AI provider" with a key field and three model dropdowns, which told a new user they needed an API key. The one action most people need, connecting Claude Code, sat two-thirds of the way down as a secondary button, above a raw command, five zip links and a paragraph about tunnels.
+
+**Page (`server.py` `_build_setup_html`):** top to bottom it is now:
+- **Who runs the AI steps?** Two large choices: "My AI assistant" (no API key) and "My own model API". This is the execution mode in plain words, and it is first because it is the default a new user is now given.
+- **Connect your AI assistant.** A picker (Claude Code, Claude app, Copilot Studio, Cursor, Codex). Selecting one shows only its steps. Claude Code shows whether it was found and whether it is connected, with one primary button. When Claude Code is not installed the button is replaced by "not found", an install link and "Check again". The manual command sits under "Do it by hand". `?assistant=<id>` in the URL selects a panel.
+- **Model API (optional).** Collapsed unless a model API is already set up.
+- **Advanced.** The four-way execution mode dropdown.
+
+Status dots start grey, not red, and the orange Vertex warning is a neutral note.
+
+**Mode rules (`server.py`):**
+- `_apply_fresh_install_mode` runs at startup: if no execution mode has ever been chosen and no model API is set up, the mode is set to `delegate_only`. An install with a key, or one that has chosen a mode, is left alone.
+- Connecting Claude Code with no model API set up and the mode on `auto` also switches to `delegate_only`.
+- The mode only becomes `auto` from the page when a model API really is set up. `POST /api/config` takes `use_model_api: true` as a request: the server switches to `auto` if an API is configured, and otherwise leaves the mode alone and says so. Picking "My own model API" with nothing set up opens the Model API section, and the switch happens on the save that sets one up.
+- Saving model settings no longer changes the mode by itself. Before, every save posted the dropdown's mode along with the provider.
+- New read-only `GET /api/assistant-status` reports whether Claude Code was found and registered (it reads `~/.claude.json`), whether a model API is set up, and the mode.
+
+**Verified:** scratch tests with a fake home: a fresh install starts in `delegate_only`; asking for the model API with none set up leaves the mode alone; saving a key without asking leaves it alone; asking once a key exists switches to `auto`; switching back keeps the key; editing model settings in delegate mode stays in delegate mode; an install with a key stays on `auto`; an explicit `auto` with no key is kept at startup and switched on connect. Headless screenshots of a fresh install with and without Claude Code, and of the rebuilt exe on the dev machine (connected, Vertex AI, three assistant panels). **Not verified:** clicking through the page by hand. The buttons were exercised through their endpoints, not a browser.
+
 ## CHANGED (2026-10-13): Claude 5.5 and GPT-6 tier defaults, Haiku output cap removed
 
 **What:** per-provider defaults are now Claude `claude-haiku-5-5` / `claude-sonnet-5-5` / `claude-opus-5-5` and OpenAI `gpt-6-luna` / `gpt-6.1-sol` / `gpt-6-astra` (fast / standard / advanced). Gemini and Vertex AI defaults are unchanged (`gemini-3.5-flash-lite` / `gemini-3.8-flash` / `gemini-3.1-pro-preview`). Touches `engine.py` (`MODEL_TIERS`, `_MODEL_TO_TIER`, `_ANTHROPIC_MAX_TOKENS`), `server.py` (setup page `MODELS` dropdowns, dead `_PROVIDER_MODELS`), `README.md`, `SETUP.md`. Older Claude and GPT-4o models stay selectable on the setup page; `claude-haiku-4-5-20251001` and the undated `claude-haiku-4-5` are removed everywhere.

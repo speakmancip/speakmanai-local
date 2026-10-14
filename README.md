@@ -29,8 +29,8 @@ No Python, no Docker, no terminal required.
 
 1. Download `SpeakmanAI.exe` from the [releases page](https://github.com/speakmancip/speakmanai-local/releases)
 2. Run it — a system tray icon appears and your browser opens automatically
-3. Choose your AI provider and enter your API key on the setup page
-4. Click **Add to Claude Code** to connect your assistant (other assistants: copy the MCP URL from the same page and add it by hand, see [SETUP.md](SETUP.md))
+3. Click **Connect Claude Code** on the setup page. No API key is needed: your assistant runs the AI steps (other assistants: pick yours on the same page for its steps, see [SETUP.md](SETUP.md))
+4. Optional: add your own model API on the same page to run steps in the background
 5. Ask your assistant: *"List the available SPEAKMAN.AI workflows and start a session"*
 
 Config is saved to `~/.speakmanai/config.json`. Logs at `~/.speakmanai/speakmanai.log`.

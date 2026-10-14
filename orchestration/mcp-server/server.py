@@ -1443,6 +1443,10 @@ async def lifespan(app: FastAPI):
     # Seed database on first launch if empty
     if os.environ.get("USE_SQLITE", "").lower() in ("true", "1", "yes"):
         await seed_if_empty()
+    try:
+        await _apply_fresh_install_mode()
+    except Exception as e:
+        log.warning(f"Could not set the fresh-install execution mode: {e}")
 
     # Start the integrated local worker queue
     asyncio.create_task(local_workflow_consumer())
@@ -1626,6 +1630,57 @@ async def _get_execution_mode() -> str:
     return mode if mode in _EXECUTION_MODES else "auto"
 
 
+def _model_api_configured() -> bool:
+    """True if a model API is set up at all: any provider key, a GCP project, or Ollama chosen."""
+    env = os.environ
+    if env.get("LLM_PROVIDER", "").lower() == "ollama":
+        return True
+    return any(env.get(k) for k in ("GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GCP_PROJECT_ID"))
+
+
+async def _set_execution_mode(mode: str) -> None:
+    await get_db()["settings"].update_one(
+        {"_id": "global_config"}, {"$set": {"execution_mode": mode}}, upsert=True
+    )
+
+
+async def _apply_fresh_install_mode() -> None:
+    """A new install with no model API starts in delegate_only, so workflows run through the
+    connected assistant without a key. An install that has ever chosen a mode is left alone."""
+    row = await get_db()["settings"].find_one({"_id": "global_config"}) or {}
+    if "execution_mode" not in row and not _model_api_configured():
+        await _set_execution_mode("delegate_only")
+        log.info("No model API configured and no execution mode chosen: defaulting to delegate_only.")
+
+
+def _claude_code_status(expected_url: str) -> dict:
+    """What the setup page needs to know about Claude Code on this machine. Read-only."""
+    home = Path.home()
+    cli = _find_claude_cli()
+    registered_url = None
+    try:
+        data = json.loads((home / ".claude.json").read_text(encoding="utf-8"))
+        registered_url = ((data.get("mcpServers") or {}).get(_MCP_SERVER_NAME) or {}).get("url")
+    except Exception:
+        pass
+    return {
+        "cli_found": bool(cli),
+        "detected": bool(cli) or (home / ".claude").is_dir(),
+        "registered": registered_url == expected_url,
+        "registered_url": registered_url,
+    }
+
+
+@app.get("/api/assistant-status")
+async def assistant_status(request: Request):
+    port = request.url.port or 8000
+    return JSONResponse({
+        "claude_code": await asyncio.to_thread(_claude_code_status, f"http://localhost:{port}/mcp"),
+        "model_api_configured": _model_api_configured(),
+        "execution_mode": await _get_execution_mode(),
+    })
+
+
 @app.get("/setup", response_class=HTMLResponse)
 async def setup_page():
     """Self-contained onboarding page — no external JS/CSS dependencies."""
@@ -1652,6 +1707,9 @@ async def get_config():
 @app.post("/api/config")
 async def post_config(request: Request):
     body = await request.json()
+    # "use_model_api" is the setup page asking to run AI steps on the user's own model API.
+    # It is a request, not a setting: the mode only becomes auto when an API is really set up.
+    use_model_api = bool(body.pop("use_model_api", False))
     mode = body.get("execution_mode")
     if mode is not None and mode not in _EXECUTION_MODES:
         return JSONResponse({"ok": False, "message": f"Invalid execution_mode: {mode!r}."}, status_code=400)
@@ -1659,12 +1717,22 @@ async def post_config(request: Request):
     cfg.update({k: v for k, v in body.items() if v is not None})
     _write_config(cfg)
     _apply_config_to_env(cfg)
+    configured = _model_api_configured()
+    message = "Configuration saved."
+    if use_model_api:
+        if configured:
+            mode = "auto"
+            message = "Saved. AI steps now run on your model API."
+        else:
+            mode = None
+            message = "Saved. Add a model API to switch: until then your assistant keeps running the AI steps."
     if mode is not None:
         # The engine reads the mode from the database, not from config.json or the environment.
-        await get_db()["settings"].update_one(
-            {"_id": "global_config"}, {"$set": {"execution_mode": mode}}, upsert=True
-        )
-    return JSONResponse({"ok": True, "message": "Configuration saved."})
+        cfg["execution_mode"] = mode
+        _write_config(cfg)
+        await _set_execution_mode(mode)
+    return JSONResponse({"ok": True, "message": message, "execution_mode": await _get_execution_mode(),
+                         "model_api_configured": configured})
 
 
 @app.get("/api/check-ollama")
@@ -1695,6 +1763,10 @@ async def setup_mcp_client(request: Request):
     # from the MCP URL shown on the setup page.
     if client_name != "claude_code":
         raise HTTPException(status_code=400, detail=f"Unknown client: {client_name}")
+
+    # Connecting an assistant with no model API set up means the assistant does the work.
+    if not _model_api_configured() and await _get_execution_mode() == "auto":
+        await _set_execution_mode("delegate_only")
 
     port = body.get("port") or request.url.port or 8000
     url = f"http://localhost:{port}/mcp"
@@ -1760,6 +1832,11 @@ def _build_setup_html(cfg: dict) -> str:
     saved_advanced = cfg.get("advanced_model", "")
     saved_gcp_project = cfg.get("gcp_project_id", "")
     saved_gcp_region  = cfg.get("gcp_region", "us-east1")
+    configured = _model_api_configured()
+    configured_js = "true" if configured else "false"
+    has_key_js = json.dumps({p: bool(cfg.get(f"{p}_api_key")) for p in ("gemini", "anthropic", "openai")})
+    # The model section starts open only for someone who already uses a model API.
+    model_open = "open" if configured else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1768,8 +1845,8 @@ def _build_setup_html(cfg: dict) -> str:
 <title>SPEAKMAN.AI Setup</title>
 <style>
   *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{ font-family: system-ui, -apple-system, sans-serif; background: #0a0f1a; color: #e2e8f0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }}
-  .card {{ background: #111827; border-radius: 12px; padding: 32px; width: 100%; max-width: 520px; box-shadow: 0 4px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,255,127,0.08); }}
+  body {{ font-family: system-ui, -apple-system, sans-serif; background: #0a0f1a; color: #e2e8f0; min-height: 100vh; display: flex; align-items: flex-start; justify-content: center; padding: 40px 24px; }}
+  .card {{ background: #111827; border-radius: 12px; padding: 32px; width: 100%; max-width: 560px; box-shadow: 0 4px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,255,127,0.08); }}
   .brand {{ font-size: 1.5rem; font-weight: 800; color: #00ff7f; letter-spacing: 0.04em; margin-bottom: 4px; }}
   .subtitle {{ color: #64748b; font-size: 0.875rem; margin-bottom: 28px; }}
   h2 {{ font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: #475569; margin-bottom: 12px; }}
@@ -1791,9 +1868,36 @@ def _build_setup_html(cfg: dict) -> str:
   .copy-row {{ display: flex; align-items: center; gap: 8px; margin-top: 6px; }}
   .copy-row code {{ flex: 1; background: #0a0f1a; border: 1px solid #1e293b; border-radius: 8px; padding: 8px 12px; font-size: 0.75rem; color: #94a3b8; overflow-x: auto; white-space: nowrap; }}
   .btn-copy {{ padding: 6px 12px; font-size: 0.75rem; }}
-  .status-dot {{ width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: #ef4444; }}
+  .status-dot {{ width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: #475569; flex: none; }}
   .status-dot.up {{ background: #00ff7f; }}
-  .warning {{ background: #1a0f00; border: 1px solid #78350f; border-radius: 6px; padding: 10px 12px; font-size: 0.8rem; color: #fbbf24; margin-top: 8px; }}
+  .status-dot.warn {{ background: #f59e0b; }}
+  .status-line {{ display: flex; align-items: center; gap: 8px; font-size: 0.875rem; color: #cbd5e1; margin-bottom: 4px; }}
+  .note {{ background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; padding: 10px 12px; font-size: 0.8rem; color: #94a3b8; margin-top: 8px; }}
+  .choice-group {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }}
+  .choice {{ cursor: pointer; border: 2px solid #1e293b; border-radius: 10px; padding: 14px; transition: all 0.15s; }}
+  .choice:hover:not(.active) {{ border-color: #334155; }}
+  .choice.active {{ border-color: #00ff7f; background: #021a0d; }}
+  .choice-title {{ font-weight: 700; font-size: 0.95rem; color: #e2e8f0; }}
+  .choice.active .choice-title {{ color: #00ff7f; }}
+  .choice-sub {{ font-size: 0.75rem; color: #64748b; margin-top: 4px; }}
+  .panel {{ margin-top: 14px; padding: 14px; border: 1px solid #1e293b; border-radius: 10px; background: #0d1422; }}
+  .panel .btn-primary {{ margin-top: 8px; }}
+  .btn-row {{ display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }}
+  a.btn {{ text-decoration: none; }}
+  .btn:disabled {{ opacity: 0.6; cursor: default; }}
+  .next-box {{ margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: #021a0d; border: 1px solid #14532d; font-size: 0.8rem; color: #a7f3d0; }}
+  .steps {{ margin: 8px 0 4px 18px; font-size: 0.8rem; color: #94a3b8; }}
+  .steps li {{ margin-bottom: 8px; }}
+  .panel a:not(.btn) {{ color: #00ff7f; }}
+  #assistant-group label {{ padding: 8px 11px; font-size: 0.82rem; }}
+  code {{ font-size: 0.78rem; color: #cbd5e1; }}
+  details.fold {{ border-top: 1px solid #1e293b; padding: 14px 0 4px; }}
+  details.fold > summary {{ cursor: pointer; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; list-style-position: inside; }}
+  details.fold[open] > summary {{ margin-bottom: 8px; }}
+  details.sub {{ margin-top: 10px; }}
+  details.sub > summary {{ cursor: pointer; font-size: 0.75rem; color: #64748b; }}
+  .opt {{ text-transform: none; letter-spacing: 0; font-weight: 400; color: #475569; margin-left: 6px; }}
+  .fold-state {{ float: right; text-transform: none; letter-spacing: 0; font-weight: 400; color: #94a3b8; }}
   .exec-hint {{ font-size: 0.75rem; color: #475569; margin-top: 6px; min-height: 1.5em; }}
   .toast {{ position: fixed; bottom: 24px; right: 24px; background: #00ff7f; color: #0a0f1a; padding: 12px 20px; border-radius: 8px; font-weight: 700; font-size: 0.875rem; opacity: 0; transition: opacity 0.3s; pointer-events: none; }}
   .toast.show {{ opacity: 1; }}
@@ -1805,85 +1909,153 @@ def _build_setup_html(cfg: dict) -> str:
 <body>
 <div class="card">
   <div class="brand">SPEAKMAN.AI</div>
-  <p class="subtitle">Configure your AI provider and connect to your AI assistant.</p>
+  <p class="subtitle">Run multi-agent workflows through the AI assistant you already use. No API key needed to start.</p>
 
   <div class="section">
-    <h2>Choose your AI Provider</h2>
-    <div class="radio-group" id="provider-group">
-      <label class="{'active' if provider == 'gemini' else ''}" onclick="setProvider('gemini')"><span>Gemini</span></label>
-      <label class="{'active' if provider == 'anthropic' else ''}" onclick="setProvider('anthropic')"><span>Claude</span></label>
-      <label class="{'active' if provider == 'openai' else ''}" onclick="setProvider('openai')"><span>OpenAI</span></label>
-      <label class="{'active' if provider == 'vertexai' else ''}" onclick="setProvider('vertexai')"><span>Vertex AI</span></label>
-      <label class="{'active' if provider == 'ollama' else ''}" onclick="setProvider('ollama')"><span>Ollama</span></label>
+    <h2>Who runs the AI steps?</h2>
+    <div class="choice-group">
+      <div class="choice" id="choice-assistant" onclick="chooseRunner('assistant')">
+        <div class="choice-title">My AI assistant</div>
+        <div class="choice-sub">No API key. Your connected assistant does the work.</div>
+      </div>
+      <div class="choice" id="choice-model" onclick="chooseRunner('model')">
+        <div class="choice-title">My own model API</div>
+        <div class="choice-sub">Steps run in the background on your provider.</div>
+      </div>
     </div>
-  </div>
-
-  <div id="cloud-section" class="section">
-    <div id="api-key-field">
-      <label class="field-label">API Key</label>
-      <input type="password" id="api-key" placeholder="Paste your API key…">
-    </div>
-    <div id="vertex-fields" style="display:none">
-      <label class="field-label">GCP Project ID</label>
-      <input type="text" id="gcp-project-id" placeholder="my-gcp-project" value="{saved_gcp_project}">
-      <label class="field-label">GCP Region</label>
-      <input type="text" id="gcp-region" placeholder="us-east1" value="{saved_gcp_region}">
-      <div class="warning">Uses Application Default Credentials — no API key needed. Run <code>gcloud auth application-default login</code> on this machine first.</div>
-    </div>
-    <label class="field-label">Fast model (quick, lightweight steps)</label>
-    <select id="default-model"></select>
-    <label class="field-label">Standard model (general reasoning)</label>
-    <select id="standard-model"></select>
-    <label class="field-label">Advanced model (complex, multi-step reasoning)</label>
-    <select id="advanced-model"></select>
-  </div>
-
-  <div id="ollama-section" class="section">
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-      <span id="ollama-dot" class="status-dot"></span>
-      <span id="ollama-status" style="font-size:0.875rem;color:#64748b;">Checking…</span>
-    </div>
-    <label class="field-label">Base URL</label>
-    <input type="text" id="ollama-url" value="http://localhost:11434">
-    <label class="field-label">Model</label>
-    <select id="ollama-model" onchange="checkModelSize()"><option>Loading…</option></select>
-    <div id="ollama-warning" class="warning" style="display:none">
-      ⚠ Models under 14B often produce incomplete outputs for multi-step workflows.
-      A 14B+ model (~10 GB RAM) is recommended. 32B+ for best quality.
-    </div>
+    <div class="exec-hint" id="runner-hint"></div>
   </div>
 
   <div class="section">
-    <label class="field-label">Execution Mode</label>
+    <h2>Connect your AI assistant</h2>
+    <div class="radio-group" id="assistant-group">
+      <label data-a="claude_code" onclick="setAssistant('claude_code')">Claude Code</label>
+      <label data-a="claude_app" onclick="setAssistant('claude_app')">Claude app</label>
+      <label data-a="copilot" onclick="setAssistant('copilot')">Copilot Studio</label>
+      <label data-a="cursor" onclick="setAssistant('cursor')">Cursor</label>
+      <label data-a="codex" onclick="setAssistant('codex')">Codex</label>
+    </div>
+
+    <div class="panel" id="panel-claude_code">
+      <div class="status-line"><span class="status-dot" id="cc-dot"></span><span id="cc-status">Checking for Claude Code...</span></div>
+      <div id="cc-ready" style="display:none">
+        <button class="btn btn-primary" id="cc-connect" onclick="connectClient('claude_code')">Connect Claude Code</button>
+        <div class="exec-hint" id="cc-hint">One click: registers this server for all your projects and installs the skills.</div>
+      </div>
+      <div id="cc-missing" style="display:none">
+        <div class="exec-hint">Install Claude Code, run it once, then check again.</div>
+        <div class="btn-row">
+          <a class="btn btn-outline" href="https://claude.com/claude-code" target="_blank" rel="noopener">Get Claude Code</a>
+          <button class="btn btn-outline" onclick="refreshAssistantStatus(true)">Check again</button>
+        </div>
+      </div>
+      <div class="next-box" id="cc-next" style="display:none">Next: open Claude Code in any folder and type <code>/generate-sad</code>, or ask it to list the SPEAKMAN.AI workflows. If Claude Code was already open, restart it first.</div>
+      <div class="exec-hint" id="skills-status"></div>
+      <button class="btn btn-outline" id="skills-btn" onclick="installSkills()" style="display:none; margin-top:6px;">Install skills for Claude Code</button>
+      <details class="sub" id="cc-manual">
+        <summary>Do it by hand</summary>
+        <div class="exec-hint">Run this in a terminal, then restart Claude Code:</div>
+        <div class="copy-row"><code id="cc-cmd"></code><button class="btn btn-outline btn-copy" onclick="copyText('cc-cmd')">Copy</button></div>
+      </details>
+    </div>
+
+    <div class="panel" id="panel-claude_app" style="display:none">
+      <div class="exec-hint">Manual setup. The Claude app covers Claude Desktop and Cowork.</div>
+      <ol class="steps">
+        <li>In the app's settings, add a custom connector (MCP server) with this URL:
+          <div class="copy-row"><code class="mcp-url" id="mcp-url-app"></code><button class="btn btn-outline btn-copy" onclick="copyText('mcp-url-app')">Copy</button></div></li>
+        <li>Download the skills plugin and upload it in the app's settings: <span class="dl" data-name="speakmanai-sdlc.zip"></span> (all 17 skills in one upload).</li>
+        <li>Ask the app to list the SPEAKMAN.AI workflows.</li>
+      </ol>
+      <div class="exec-hint">Single skills, if you cannot upload a plugin: <span class="dl" data-name="generate-sad.zip"></span>, <span class="dl" data-name="generate-compliance-report.zip"></span>, <span class="dl" data-name="generate-speakmanai-code.zip"></span>.</div>
+      <div class="exec-hint">Experimental: with only the connector added, ask for a SPEAKMAN.AI deliverable and the app can fetch the skill from this server.</div>
+    </div>
+
+    <div class="panel" id="panel-copilot" style="display:none">
+      <div class="exec-hint">Manual setup. Copilot Studio runs in the cloud, so it cannot reach this computer directly.</div>
+      <ol class="steps">
+        <li>Forward port <span class="port"></span> to a public URL (for example VS Code port forwarding), and open <code>/setup</code> through that URL once.</li>
+        <li>In your agent, add an MCP connector using the public URL followed by <code>/mcp</code>.</li>
+        <li>Download <span class="dl" data-name="copilot-studio-skills.zip"></span>, unzip it, and upload each item in the agent's Skills tab (17 uploads).</li>
+      </ol>
+      <div class="exec-hint">Full guide: <a href="https://github.com/speakmancip/speakmanai-cc/blob/master/desktop-skills/COPILOT_STUDIO.md" target="_blank" rel="noopener">COPILOT_STUDIO.md</a></div>
+    </div>
+
+    <div class="panel" id="panel-cursor" style="display:none">
+      <div class="exec-hint">Not tested yet. Add this MCP server URL in Cursor's MCP settings:</div>
+      <div class="copy-row"><code class="mcp-url" id="mcp-url-cursor"></code><button class="btn btn-outline btn-copy" onclick="copyText('mcp-url-cursor')">Copy</button></div>
+    </div>
+
+    <div class="panel" id="panel-codex" style="display:none">
+      <div class="exec-hint">Not tested yet. Add this MCP server URL in Codex's MCP settings:</div>
+      <div class="copy-row"><code class="mcp-url" id="mcp-url-codex"></code><button class="btn btn-outline btn-copy" onclick="copyText('mcp-url-codex')">Copy</button></div>
+    </div>
+  </div>
+
+  <details class="fold" id="model-fold" {model_open}>
+    <summary>Model API <span class="opt">optional</span><span class="fold-state" id="model-state"></span></summary>
+    <div class="exec-hint">Not needed when your assistant runs the steps. Add one to run steps in the background and to have outputs checked by validators.</div>
+
+    <div class="section" style="margin-top:14px">
+      <div class="radio-group" id="provider-group">
+        <label class="{'active' if provider == 'gemini' else ''}" onclick="setProvider('gemini')"><span>Gemini</span></label>
+        <label class="{'active' if provider == 'anthropic' else ''}" onclick="setProvider('anthropic')"><span>Claude</span></label>
+        <label class="{'active' if provider == 'openai' else ''}" onclick="setProvider('openai')"><span>OpenAI</span></label>
+        <label class="{'active' if provider == 'vertexai' else ''}" onclick="setProvider('vertexai')"><span>Vertex AI</span></label>
+        <label class="{'active' if provider == 'ollama' else ''}" onclick="setProvider('ollama')"><span>Ollama</span></label>
+      </div>
+    </div>
+
+    <div id="cloud-section" class="section">
+      <div id="api-key-field">
+        <label class="field-label">API Key</label>
+        <input type="password" id="api-key" placeholder="Paste your API key">
+      </div>
+      <div id="vertex-fields" style="display:none">
+        <label class="field-label">GCP Project ID</label>
+        <input type="text" id="gcp-project-id" placeholder="my-gcp-project" value="{saved_gcp_project}">
+        <label class="field-label">GCP Region</label>
+        <input type="text" id="gcp-region" placeholder="us-east1" value="{saved_gcp_region}">
+        <div class="note">Vertex AI signs in with your Google account, so there is no API key. Run <code>gcloud auth application-default login</code> on this computer once.</div>
+      </div>
+      <label class="field-label">Fast model (quick, lightweight steps)</label>
+      <select id="default-model"></select>
+      <label class="field-label">Standard model (general reasoning)</label>
+      <select id="standard-model"></select>
+      <label class="field-label">Advanced model (complex, multi-step reasoning)</label>
+      <select id="advanced-model"></select>
+    </div>
+
+    <div id="ollama-section" class="section">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <span id="ollama-dot" class="status-dot"></span>
+        <span id="ollama-status" style="font-size:0.875rem;color:#64748b;">Checking...</span>
+      </div>
+      <label class="field-label">Base URL</label>
+      <input type="text" id="ollama-url" value="http://localhost:11434">
+      <label class="field-label">Model</label>
+      <select id="ollama-model" onchange="checkModelSize()"><option>Loading...</option></select>
+      <div id="ollama-warning" class="note" style="display:none">
+        Models under 14B often produce incomplete outputs for multi-step workflows.
+        A 14B+ model (~10 GB RAM) is recommended. 32B+ for best quality.
+      </div>
+    </div>
+
+    <button class="btn btn-primary" onclick="saveConfig()">Save model settings</button>
+  </details>
+
+  <details class="fold" id="adv-fold">
+    <summary>Advanced</summary>
+    <label class="field-label">Execution mode</label>
     <select id="exec-mode" onchange="updateExecHint()">
-      <option value="auto">Auto — use each agent's configured model</option>
-      <option value="force_delegate">Force Delegate — your AI assistant executes every step</option>
-      <option value="force_background">Force Background — run all steps with the LLM above (no assistant handoff)</option>
-      <option value="delegate_only">Delegate Only (API paused) — your AI assistant executes every step; saved keys are kept but not used</option>
+      <option value="delegate_only">Delegate Only: your assistant runs every AI step, model API paused</option>
+      <option value="auto">Auto: each agent uses its configured model</option>
+      <option value="force_delegate">Force Delegate: your assistant runs every AI step, validators use the model API</option>
+      <option value="force_background">Force Background: every step runs on the model API</option>
     </select>
     <div class="exec-hint" id="exec-hint"></div>
-  </div>
-
-  <button class="btn btn-primary" onclick="saveConfig()">Save &amp; Apply</button>
-
-  <hr class="divider">
-
-  <div class="section">
-    <h2>Connect your AI Assistant</h2>
-    <label class="field-label">Claude Code</label>
-    <button class="btn btn-outline" onclick="connectClient('claude_code')">Add to Claude Code</button>
-    <div class="exec-hint">Registers this server for all your projects and installs the skills. If the button cannot find Claude Code, run this command in a terminal instead:</div>
-    <div class="copy-row"><code id="cc-cmd"></code><button class="btn btn-outline btn-copy" onclick="copyText('cc-cmd')">Copy</button></div>
-
-    <label class="field-label">Skills</label>
-    <div class="exec-hint" id="skills-status">Checking skills...</div>
-    <button class="btn btn-outline" id="skills-btn" onclick="installSkills()" style="display:none; margin-top:6px;">Install skills for Claude Code</button>
-    <div class="exec-hint" id="skills-downloads"></div>
-
-    <label class="field-label">Other assistants (manual setup)</label>
-    <div class="exec-hint">Add this MCP server URL in the assistant's own settings. The Claude app (Desktop and Cowork): add the server and upload the skills bundle by hand. Copilot Studio: use a public tunnel URL in place of localhost. Cursor and Codex: not tested.</div>
-    <div class="copy-row"><code id="mcp-url"></code><button class="btn btn-outline btn-copy" onclick="copyText('mcp-url')">Copy</button></div>
-  </div>
+    <button class="btn btn-outline" style="margin-top:10px" onclick="saveMode()">Apply mode</button>
+  </details>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -1896,131 +2068,126 @@ const MODELS = {{
   vertexai:  {{ fast: ['gemini-3.5-flash-lite','gemini-3.1-flash-lite','gemini-3.8-flash'], standard: ['gemini-3.8-flash','gemini-3-flash-preview','gemini-3.5-flash-lite'], advanced: ['gemini-3.1-pro-preview','gemini-3.8-flash'] }},
   ollama:    {{ fast: [], standard: [], advanced: [] }},
 }};
+const PROVIDER_NAMES = {{ gemini: 'Gemini', anthropic: 'Claude', openai: 'OpenAI', vertexai: 'Vertex AI', ollama: 'Ollama' }};
 
 const SAVED = {{ fast: '{saved_fast}', standard: '{saved_standard}', advanced: '{saved_advanced}' }};
+const HAS_KEY = {has_key_js};
+const SAVED_PROVIDER = '{provider}';
+const MCP_PORT = Number(location.port) || 8000;
+const MCP_URL = 'http://localhost:' + MCP_PORT + '/mcp';
 
 let currentProvider = '{provider}';
+let modelConfigured = {configured_js};
+let execMode = '{saved_exec}';
+// Set when the user picks "My own model API" before one is set up: the next successful
+// save of model settings then switches the mode.
+let wantsModelApi = false;
 
-function setProvider(p) {{
-  currentProvider = p;
-  document.querySelectorAll('#provider-group label').forEach((l,i) => {{
-    l.classList.toggle('active', ['gemini','anthropic','openai','vertexai','ollama'][i] === p);
-  }});
-  document.getElementById('cloud-section').style.display = p === 'ollama' ? 'none' : 'block';
-  document.getElementById('ollama-section').style.display = p === 'ollama' ? 'block' : 'none';
-  document.getElementById('api-key-field').style.display = p === 'vertexai' ? 'none' : 'block';
-  document.getElementById('vertex-fields').style.display = p === 'vertexai' ? 'block' : 'none';
-  if (p !== 'ollama') populateModelDropdowns(p);
-  if (p === 'ollama') checkOllama();
+const $ = id => document.getElementById(id);
+
+// ---- Who runs the AI steps ----
+function renderRunner() {{
+  const assistant = execMode === 'delegate_only' || execMode === 'force_delegate';
+  $('choice-assistant').classList.toggle('active', assistant && !wantsModelApi);
+  $('choice-model').classList.toggle('active', !assistant || wantsModelApi);
+  let hint;
+  if (wantsModelApi && !modelConfigured) hint = 'Add a model API below and save. Until then your assistant keeps running the AI steps.';
+  else if (execMode === 'delegate_only') hint = 'Your connected assistant runs every AI step. No model API is called' + (modelConfigured ? ', and your saved model settings are kept.' : '.');
+  else if (execMode === 'force_delegate') hint = 'Your connected assistant runs every AI step. Validators still use your model API. (Force Delegate, set under Advanced.)';
+  else if (execMode === 'force_background') hint = 'Every step runs on your model API. (Force Background, set under Advanced.)';
+  else if (modelConfigured) hint = 'AI steps run on your model API (' + (PROVIDER_NAMES[SAVED_PROVIDER] || SAVED_PROVIDER) + '). Steps a workflow marks for your assistant still go to your assistant.';
+  else hint = 'No model API is set up, so background steps will fail. Choose "My AI assistant", or add a model API below.';
+  $('runner-hint').textContent = hint;
+  $('model-state').textContent = modelConfigured ? (PROVIDER_NAMES[SAVED_PROVIDER] || SAVED_PROVIDER) : 'not set';
+  $('exec-mode').value = execMode;
+  updateExecHint();
 }}
 
-function populateModelDropdowns(p) {{
-  const m = MODELS[p] || {{ fast: [], standard: [], advanced: [] }};
-  const fill = (id, opts, saved) => {{
-    const sel = document.getElementById(id);
-    sel.innerHTML = opts.map(o => `<option value="${{o}}">${{o}}</option>`).join('');
-    if (saved && opts.includes(saved)) sel.value = saved;
-  }};
-  fill('default-model',  m.fast,     SAVED.fast);
-  fill('standard-model', m.standard, SAVED.standard);
-  fill('advanced-model', m.advanced, SAVED.advanced);
-}}
-
-async function checkOllama() {{
-  const url = document.getElementById('ollama-url').value;
-  const dot = document.getElementById('ollama-dot');
-  const status = document.getElementById('ollama-status');
-  const sel = document.getElementById('ollama-model');
-  try {{
-    const r = await fetch('/api/check-ollama');
-    const d = await r.json();
-    if (d.available) {{
-      dot.className = 'status-dot up';
-      status.textContent = 'Running';
-      sel.innerHTML = d.models.length
-        ? d.models.map(m => `<option value="${{m.name}}" data-param-size="${{m.parameter_size}}">${{m.name}}${{m.parameter_size ? ' (' + m.parameter_size + ')' : ''}}</option>`).join('')
-        : '<option>No models found — run: ollama pull qwen2.5:14b</option>';
-      checkModelSize();
-    }} else {{
-      dot.className = 'status-dot';
-      status.textContent = 'Not running — start Ollama first';
-      sel.innerHTML = '<option>Ollama offline</option>';
-    }}
-  }} catch(e) {{
-    dot.className = 'status-dot';
-    status.textContent = 'Cannot connect';
-  }}
-}}
-
-function checkModelSize() {{
-  const sel = document.getElementById('ollama-model');
-  const warn = document.getElementById('ollama-warning');
-  const opt = sel.options[sel.selectedIndex];
-  const paramSize = opt ? opt.getAttribute('data-param-size') || '' : '';
-  // Use parameter_size from API (e.g. "8B", "14B") — fall back to parsing the name
-  const match = paramSize.match(/(\\d+(?:\\.\\d+)?)/i) || (sel.value || '').match(/(\\d+)b/i);
-  const size = match ? parseFloat(match[1]) : 99;
-  warn.style.display = size < 14 ? 'block' : 'none';
-}}
-
-const EXEC_HINTS = {{
-  auto:             'Each agent runs with its own configured model. The provider chosen above is used to resolve abstract model tiers (fast / standard / advanced).',
-  force_delegate:   'Every AI step pauses and is handed to your connected AI assistant (e.g. Claude Code) to execute instead of the LLM.',
-  delegate_only:    'Like Force Delegate, and the model API is paused: no calls are made, no failures when you are out of credits, and your keys and provider settings are kept. Validators are skipped and marked as such. Switch back to Auto to resume API use.',
-  force_background: 'Any steps configured to delegate to an AI assistant are overridden and run automatically using the provider above — fully hands-off.',
-}};
-
-function updateExecHint() {{
-  const val = document.getElementById('exec-mode').value;
-  document.getElementById('exec-hint').textContent = EXEC_HINTS[val] || '';
-}}
-
-async function saveConfig() {{
-  const p = currentProvider;
-  const body = {{
-    llm_provider: p,
-    execution_mode: document.getElementById('exec-mode').value,
-  }};
-  if (p === 'ollama') {{
-    body.ollama_base_url = document.getElementById('ollama-url').value;
-    const ollamaModel = document.getElementById('ollama-model').value;
-    body.default_model   = ollamaModel;
-    body.standard_model  = ollamaModel;
-    body.advanced_model  = ollamaModel;
-  }} else if (p === 'vertexai') {{
-    body.gcp_project_id = document.getElementById('gcp-project-id').value;
-    body.gcp_region     = document.getElementById('gcp-region').value;
-    body.gemini_api_key = '';  // Vertex AI uses ADC, not an API key — clear any saved Gemini key
-    body.default_model   = document.getElementById('default-model').value;
-    body.standard_model  = document.getElementById('standard-model').value;
-    body.advanced_model  = document.getElementById('advanced-model').value;
-  }} else {{
-    const key = document.getElementById('api-key').value;
-    if (key && !key.includes('••')) body[p + '_api_key'] = key;
-    if (p === 'gemini') {{ body.gcp_project_id = ''; body.gcp_region = ''; }}
-    body.default_model   = document.getElementById('default-model').value;
-    body.standard_model  = document.getElementById('standard-model').value;
-    body.advanced_model  = document.getElementById('advanced-model').value;
-  }}
+async function postConfig(body) {{
   const r = await fetch('/api/config', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(body) }});
   const d = await r.json();
-  showToast(d.ok ? 'Configuration saved!' : d.message, !d.ok);
+  if (d.execution_mode) execMode = d.execution_mode;
+  if (typeof d.model_api_configured === 'boolean') modelConfigured = d.model_api_configured;
+  return d;
+}}
+
+async function chooseRunner(which) {{
+  if (which === 'assistant') {{
+    wantsModelApi = false;
+    const d = await postConfig({{ execution_mode: 'delegate_only' }});
+    showToast(d.ok ? 'Your assistant now runs the AI steps.' : d.message, !d.ok);
+  }} else if (modelConfigured) {{
+    wantsModelApi = false;
+    const d = await postConfig({{ use_model_api: true }});
+    showToast(d.message, !d.ok);
+  }} else {{
+    wantsModelApi = true;
+    $('model-fold').open = true;
+    $('model-fold').scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+  }}
+  renderRunner();
+}}
+
+// ---- Assistant picker ----
+function setAssistant(a) {{
+  document.querySelectorAll('#assistant-group label').forEach(l => l.classList.toggle('active', l.dataset.a === a));
+  document.querySelectorAll('.panel').forEach(p => p.style.display = p.id === 'panel-' + a ? 'block' : 'none');
+  try {{ localStorage.setItem('speakmanai-assistant', a); }} catch (e) {{}}
+}}
+
+async function refreshAssistantStatus(announce) {{
+  let st;
+  try {{ st = await (await fetch('/api/assistant-status')).json(); }} catch (e) {{ $('cc-status').textContent = 'Could not check for Claude Code.'; return; }}
+  const cc = st.claude_code;
+  $('cc-ready').style.display = cc.detected ? 'block' : 'none';
+  $('cc-missing').style.display = cc.detected ? 'none' : 'block';
+  $('cc-next').style.display = cc.registered ? 'block' : 'none';
+  $('cc-hint').style.display = cc.registered ? 'none' : 'block';
+  const btn = $('cc-connect');
+  if (cc.registered) {{
+    $('cc-dot').className = 'status-dot up';
+    $('cc-status').textContent = 'Connected to Claude Code.';
+    btn.textContent = 'Reconnect Claude Code';
+    btn.className = 'btn btn-outline';
+  }} else if (cc.detected) {{
+    $('cc-dot').className = 'status-dot';
+    $('cc-status').textContent = 'Claude Code found. Not connected yet.';
+    btn.textContent = 'Connect Claude Code';
+    btn.className = 'btn btn-primary';
+  }} else {{
+    $('cc-dot').className = 'status-dot warn';
+    $('cc-status').textContent = 'Claude Code was not found on this computer.';
+  }}
+  modelConfigured = st.model_api_configured;
+  execMode = st.execution_mode;
+  renderRunner();
+  if (announce) showToast(cc.detected ? 'Claude Code found.' : 'Still not found. Install Claude Code and run it once.', !cc.detected);
 }}
 
 async function connectClient(name) {{
-  const r = await fetch('/api/setup-mcp-client', {{
-    method: 'POST',
-    headers: {{'Content-Type':'application/json'}},
-    body: JSON.stringify({{ client: name, port: MCP_PORT }})
-  }});
-  const d = await r.json();
-  // The skills are useful even when registration has to be finished by hand.
-  const s = await postInstallSkills();
-  const skillsMsg = s.bundled === false ? '' : ' ' + s.message;
-  showToast(d.message + skillsMsg, !d.ok || s.ok === false && s.bundled !== false);
-  refreshSkillsStatus();
+  const btn = $('cc-connect');
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Connecting...';
+  try {{
+    const r = await fetch('/api/setup-mcp-client', {{
+      method: 'POST',
+      headers: {{'Content-Type':'application/json'}},
+      body: JSON.stringify({{ client: name, port: MCP_PORT }})
+    }});
+    const d = await r.json();
+    // The skills are useful even when registration has to be finished by hand.
+    const s = await postInstallSkills();
+    const skillsMsg = s.bundled === false ? '' : ' ' + s.message;
+    showToast(d.message + skillsMsg, !d.ok || s.ok === false && s.bundled !== false);
+    if (!d.ok) $('cc-manual').open = true;
+  }} finally {{
+    btn.disabled = false; btn.textContent = label;
+    await refreshAssistantStatus();
+    refreshSkillsStatus();
+  }}
 }}
 
+// ---- Skills ----
 async function postInstallSkills() {{
   const st = await (await fetch('/api/skills-status')).json();
   if (!st.bundled) return {{ ok: false, bundled: false, message: st.message }};
@@ -2035,47 +2202,167 @@ async function installSkills() {{
 }}
 
 const SKILLS_STATE_TEXT = {{
-  not_installed:    'Not installed.',
-  up_to_date:       'Installed and up to date.',
-  update_available: 'An update is available.',
+  not_installed:    'not installed yet',
+  up_to_date:       'installed and up to date',
+  update_available: 'update available',
 }};
 
 async function refreshSkillsStatus() {{
-  const el = document.getElementById('skills-status');
-  const btn = document.getElementById('skills-btn');
-  const dl = document.getElementById('skills-downloads');
+  const el = $('skills-status');
+  const btn = $('skills-btn');
   let st;
-  try {{ st = await (await fetch('/api/skills-status')).json(); }} catch (e) {{ el.textContent = 'Could not read skills status.'; return; }}
-  if (!st.bundled) {{ el.textContent = st.message; btn.style.display = 'none'; dl.textContent = ''; return; }}
-  let text = st.skills + ' skills bundled (version ' + st.bundled_version + '). ' + (SKILLS_STATE_TEXT[st.state] || '');
-  if (st.installed_version && st.state !== 'up_to_date') text += ' Installed version: ' + st.installed_version + '.';
-  if (st.counts.modified) text += ' ' + st.counts.modified + ' installed files differ from the last install and will be backed up before they are replaced.';
-  if (!st.claude_code_detected) text += ' Claude Code was not detected on this machine.';
-  el.textContent = text;
-  btn.style.display = st.state === 'up_to_date' ? 'none' : 'inline-flex';
-  btn.textContent = st.state === 'not_installed' ? 'Install skills for Claude Code' : 'Update skills for Claude Code';
-  dl.textContent = '';
-  if (st.downloads.length) {{
-    dl.appendChild(document.createTextNode('Bundles to upload by hand in other assistants: '));
-    st.downloads.forEach((name, i) => {{
+  try {{ st = await (await fetch('/api/skills-status')).json(); }} catch (e) {{ el.textContent = ''; return; }}
+  const downloads = st.bundled ? st.downloads : [];
+  document.querySelectorAll('.dl').forEach(span => {{
+    const name = span.dataset.name;
+    span.textContent = '';
+    if (downloads.includes(name)) {{
       const a = document.createElement('a');
       a.href = '/downloads/skills/' + encodeURIComponent(name);
       a.textContent = name;
-      a.style.color = '#00ff7f';
-      dl.appendChild(a);
-      if (i < st.downloads.length - 1) dl.appendChild(document.createTextNode(', '));
-    }});
+      span.appendChild(a);
+    }} else {{
+      span.textContent = name + ' (not included in this build)';
+    }}
+  }});
+  if (!st.bundled) {{ el.textContent = 'This build does not include the skills.'; btn.style.display = 'none'; return; }}
+  let text = st.skills + ' skills: ' + (SKILLS_STATE_TEXT[st.state] || st.state) + '.';
+  if (st.counts.modified) text += ' ' + st.counts.modified + ' files you changed will be backed up before they are replaced.';
+  el.textContent = text;
+  // A first install happens as part of Connect; this button is for updates.
+  btn.style.display = st.state === 'update_available' && st.claude_code_detected ? 'inline-flex' : 'none';
+  btn.textContent = 'Update skills';
+}}
+
+// ---- Model API ----
+function setProvider(p) {{
+  currentProvider = p;
+  document.querySelectorAll('#provider-group label').forEach((l,i) => {{
+    l.classList.toggle('active', ['gemini','anthropic','openai','vertexai','ollama'][i] === p);
+  }});
+  $('cloud-section').style.display = p === 'ollama' ? 'none' : 'block';
+  $('ollama-section').style.display = p === 'ollama' ? 'block' : 'none';
+  $('api-key-field').style.display = p === 'vertexai' ? 'none' : 'block';
+  $('vertex-fields').style.display = p === 'vertexai' ? 'block' : 'none';
+  $('api-key').placeholder = HAS_KEY[p] ? 'Key saved. Paste a new one to replace it' : 'Paste your API key';
+  if (p !== 'ollama') populateModelDropdowns(p);
+  if (p === 'ollama') checkOllama();
+}}
+
+function populateModelDropdowns(p) {{
+  const m = MODELS[p] || {{ fast: [], standard: [], advanced: [] }};
+  const fill = (id, opts, saved) => {{
+    const sel = $(id);
+    sel.innerHTML = opts.map(o => `<option value="${{o}}">${{o}}</option>`).join('');
+    if (saved && opts.includes(saved)) sel.value = saved;
+  }};
+  fill('default-model',  m.fast,     SAVED.fast);
+  fill('standard-model', m.standard, SAVED.standard);
+  fill('advanced-model', m.advanced, SAVED.advanced);
+}}
+
+async function checkOllama() {{
+  const dot = $('ollama-dot');
+  const status = $('ollama-status');
+  const sel = $('ollama-model');
+  try {{
+    const r = await fetch('/api/check-ollama');
+    const d = await r.json();
+    if (d.available) {{
+      dot.className = 'status-dot up';
+      status.textContent = 'Running';
+      sel.innerHTML = d.models.length
+        ? d.models.map(m => `<option value="${{m.name}}" data-param-size="${{m.parameter_size}}">${{m.name}}${{m.parameter_size ? ' (' + m.parameter_size + ')' : ''}}</option>`).join('')
+        : '<option>No models found. Run: ollama pull qwen2.5:14b</option>';
+      checkModelSize();
+    }} else {{
+      dot.className = 'status-dot warn';
+      status.textContent = 'Ollama is not running. Start it, then pick Ollama again.';
+      sel.innerHTML = '<option>Ollama offline</option>';
+    }}
+  }} catch(e) {{
+    dot.className = 'status-dot warn';
+    status.textContent = 'Cannot reach Ollama';
   }}
 }}
-refreshSkillsStatus();
 
-const MCP_PORT = Number(location.port) || 8000;
-const MCP_URL = 'http://localhost:' + MCP_PORT + '/mcp';
-document.getElementById('mcp-url').textContent = MCP_URL;
-document.getElementById('cc-cmd').textContent = 'claude mcp add --transport http --scope user {_MCP_SERVER_NAME} ' + MCP_URL;
+function checkModelSize() {{
+  const sel = $('ollama-model');
+  const warn = $('ollama-warning');
+  const opt = sel.options[sel.selectedIndex];
+  const paramSize = opt ? opt.getAttribute('data-param-size') || '' : '';
+  // Use parameter_size from API (e.g. "8B", "14B"), falling back to parsing the name
+  const match = paramSize.match(/(\\d+(?:\\.\\d+)?)/i) || (sel.value || '').match(/(\\d+)b/i);
+  const size = match ? parseFloat(match[1]) : 99;
+  warn.style.display = size < 14 ? 'block' : 'none';
+}}
 
+async function saveConfig() {{
+  const p = currentProvider;
+  const body = {{ llm_provider: p }};
+  if (p === 'ollama') {{
+    body.ollama_base_url = $('ollama-url').value;
+    const ollamaModel = $('ollama-model').value;
+    body.default_model   = ollamaModel;
+    body.standard_model  = ollamaModel;
+    body.advanced_model  = ollamaModel;
+  }} else if (p === 'vertexai') {{
+    if (!$('gcp-project-id').value.trim()) {{ showToast('Enter a GCP project ID first.', true); return; }}
+    body.gcp_project_id = $('gcp-project-id').value.trim();
+    body.gcp_region     = $('gcp-region').value.trim();
+    body.gemini_api_key = '';  // Vertex AI uses ADC, not an API key, so clear any saved Gemini key
+    body.default_model   = $('default-model').value;
+    body.standard_model  = $('standard-model').value;
+    body.advanced_model  = $('advanced-model').value;
+  }} else {{
+    const key = $('api-key').value;
+    if (!key && !HAS_KEY[p]) {{ showToast('Paste an API key first.', true); return; }}
+    if (key) body[p + '_api_key'] = key;
+    if (p === 'gemini') {{ body.gcp_project_id = ''; body.gcp_region = ''; }}
+    body.default_model   = $('default-model').value;
+    body.standard_model  = $('standard-model').value;
+    body.advanced_model  = $('advanced-model').value;
+  }}
+  // Saving model settings does not change who runs the steps, unless the user asked for
+  // their own model API above. The server only switches once an API is really set up.
+  if (wantsModelApi) body.use_model_api = true;
+  const d = await postConfig(body);
+  if (d.ok) {{
+    if ($('api-key').value) {{ HAS_KEY[p] = true; $('api-key').value = ''; }}
+    if (execMode === 'auto') wantsModelApi = false;
+    let msg = d.message;
+    if (!body.use_model_api && (execMode === 'delegate_only') && modelConfigured) msg = 'Model settings saved. Your assistant still runs the AI steps. Choose "My own model API" at the top to use this model.';
+    showToast(msg);
+    setTimeout(() => location.reload(), 1600);
+  }} else {{
+    showToast(d.message, true);
+  }}
+}}
+
+// ---- Advanced ----
+const EXEC_HINTS = {{
+  auto:             'Each agent runs with its own configured model. Steps a workflow marks for your assistant are handed to it.',
+  force_delegate:   'Every AI step pauses and is handed to your connected assistant. Validators still call your model API when one is set up.',
+  delegate_only:    'Every AI step is handed to your connected assistant and the model API is paused: no calls, no failures when you are out of credits, and your saved keys are kept. Validators are skipped and marked as such.',
+  force_background: 'Steps set to be handed to an assistant run on your model API instead. Fully hands-off, and needs a model API.',
+}};
+
+function updateExecHint() {{
+  $('exec-hint').textContent = EXEC_HINTS[$('exec-mode').value] || '';
+}}
+
+async function saveMode() {{
+  const mode = $('exec-mode').value;
+  wantsModelApi = false;
+  const d = await postConfig({{ execution_mode: mode }});
+  const needsApi = (mode === 'auto' || mode === 'force_background') && !modelConfigured;
+  showToast(d.ok ? (needsApi ? 'Mode applied, but no model API is set up, so those steps will fail.' : 'Mode applied.') : d.message, !d.ok || needsApi);
+  renderRunner();
+}}
+
+// ---- Shared ----
 async function copyText(id) {{
-  const text = document.getElementById(id).textContent;
+  const text = $(id).textContent;
   try {{
     await navigator.clipboard.writeText(text);
     showToast('Copied');
@@ -2085,16 +2372,24 @@ async function copyText(id) {{
 }}
 
 function showToast(msg, isError=false) {{
-  const t = document.getElementById('toast');
+  const t = $('toast');
   t.textContent = msg;
   t.className = 'toast show' + (isError ? ' error' : '');
-  setTimeout(() => t.className = 'toast', 3500);
+  setTimeout(() => t.className = 'toast', isError ? 6000 : 3500);
 }}
 
 // Initialise on load
+document.querySelectorAll('.mcp-url').forEach(el => el.textContent = MCP_URL);
+document.querySelectorAll('.port').forEach(el => el.textContent = MCP_PORT);
+$('cc-cmd').textContent = 'claude mcp add --transport http --scope user {_MCP_SERVER_NAME} ' + MCP_URL;
+let startAssistant = 'claude_code';
+try {{ startAssistant = new URLSearchParams(location.search).get('assistant') || localStorage.getItem('speakmanai-assistant') || 'claude_code'; }} catch (e) {{}}
+if (!$('panel-' + startAssistant)) startAssistant = 'claude_code';
+setAssistant(startAssistant);
 setProvider(currentProvider);
-document.getElementById('exec-mode').value = '{saved_exec}';
-updateExecHint();
+renderRunner();
+refreshAssistantStatus();
+refreshSkillsStatus();
 </script>
 </body>
 </html>"""

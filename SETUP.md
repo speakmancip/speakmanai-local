@@ -117,7 +117,7 @@ import_architecture_plan('<contents of WorkflowsAndAgents/CLAUDE_WORKFLOW_CREATO
 claude mcp add --transport http --scope user speakmanai http://localhost:8000/mcp
 ```
 
-The setup page at `http://localhost:8000/setup` has an **Add to Claude Code** button that runs this for you, and shows the command to copy if it cannot find the `claude` CLI. Restart Claude Code afterwards, then check with `claude mcp list`.
+The setup page at `http://localhost:8000/setup` has a **Connect Claude Code** button that runs this for you, and shows the command to copy if it cannot find the `claude` CLI. Restart Claude Code afterwards, then check with `claude mcp list`.
 
 > Earlier versions wrote the server into `~/.claude/settings.json`. Claude Code does not read MCP servers from that file, so that entry never took effect. It keeps them in `~/.claude.json`, which the command above updates.
 
@@ -218,7 +218,7 @@ The exe carries the SPEAKMAN.AI skills from the [speakmanai-cc](https://github.c
 
 Point it at the checkout with `--cc-dir PATH` or `SPEAKMANAI_CC_DIR`. By default it looks for a `speakmanai-cc` folder beside this repo's grandparent. Build from a clean checkout: uncommitted changes mark the version `.dirty`. `speakmanai.spec` includes the bundle when it exists and warns when it does not.
 
-**At run time**, **Add to Claude Code** on the setup page registers the MCP server and installs the skills. It copies them to `~/.claude/skills` and the assets to `~/.claude/speakmanai-cc`, without prompting:
+**At run time**, **Connect Claude Code** on the setup page registers the MCP server and installs the skills. It copies them to `~/.claude/skills` and the assets to `~/.claude/speakmanai-cc`, without prompting:
 
 - a file you have not changed since the last install is replaced
 - a file that differs from the last install (you edited it, or it came from `install.ps1`) is copied to `~/.claude/speakmanai-cc/backups/<timestamp>/` first, then replaced
@@ -229,8 +229,10 @@ Point it at the checkout with `--cc-dir PATH` or `SPEAKMANAI_CC_DIR`. By default
 ### First run
 
 1. Launch `SpeakmanAI.exe` — a tray icon appears and a browser window opens automatically
-2. Choose your AI provider and enter your API key in the setup page
-3. Connect your AI assistant from the setup page
+2. Click **Connect Claude Code** on the setup page (or pick another assistant for its manual steps)
+3. Optional: add your own model API under **Model API**
+
+A new install with no model API starts in Delegate Only mode, so workflows run through your connected assistant with no key.
 
 Config is stored at `~/.speakmanai/config.json`. The SQLite database is at `~/.speakmanai/speakmanai.db`. Logs are at `~/.speakmanai/speakmanai.log`.
 
@@ -241,9 +243,11 @@ Config is stored at `~/.speakmanai/config.json`. The SQLite database is at `~/.s
 All modes expose a setup UI at `http://localhost:8000/setup`.
 
 Use it to:
-- Pick your AI provider (Gemini, Claude, OpenAI, Vertex AI, Ollama)
+- Choose who runs the AI steps: your connected assistant (no API key) or your own model API. Choosing your own model API only takes effect once one is set up
+- Connect your assistant: pick it from the list to see its steps. Claude Code is one click; the Claude app, Copilot Studio, Cursor and Codex are manual
+- Pick your AI provider (Gemini, Claude, OpenAI, Vertex AI, Ollama), under **Model API**, which is optional
 - Enter your API key (or GCP project/region for Vertex AI, which uses Application Default Credentials instead) and choose fast / standard / advanced models
-- Set the execution mode
+- Set the execution mode directly, under **Advanced**
 - Connect your AI assistant (one click for Claude Code; a copyable MCP URL for the others)
 
 ### Execution Modes
