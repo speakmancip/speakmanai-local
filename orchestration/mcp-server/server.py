@@ -1747,6 +1747,9 @@ def _claude_code_status(expected_url: str) -> dict:
         pass
     return {
         "cli_found": bool(cli),
+        # The native installer puts claude.exe in ~/.local/bin and does not always add it to PATH.
+        "cli_on_path": bool(shutil.which("claude")),
+        "windows": os.name == "nt",
         "detected": bool(cli) or (home / ".claude").is_dir(),
         "registered": registered_url == expected_url,
         "registered_url": registered_url,
@@ -2054,11 +2057,20 @@ def _build_setup_html(cfg: dict) -> str:
         <div class="exec-hint" id="cc-hint">One click: registers this server for all your projects and installs the skills.</div>
       </div>
       <div id="cc-missing" style="display:none">
-        <div class="exec-hint">Install Claude Code, run it once, then check again.</div>
+        <div class="exec-hint">Install the Claude Code command line tool: paste this into PowerShell.</div>
+        <div class="copy-row"><code id="cc-install-cmd">irm https://claude.ai/install.ps1 | iex</code><button class="btn btn-outline btn-copy" onclick="copyText('cc-install-cmd')">Copy</button></div>
+        <div class="exec-hint">Then run <code>claude</code> once. It opens your browser so you can sign in. Then press Check again. The Claude app on its own does not include this command.</div>
         <div class="btn-row">
           <a class="btn btn-outline" href="https://claude.com/claude-code" target="_blank" rel="noopener">Get Claude Code</a>
           <button class="btn btn-outline" onclick="refreshAssistantStatus(true)">Check again</button>
         </div>
+      </div>
+      <div id="cc-path" style="display:none">
+        <div class="exec-hint">If Windows says <code>claude</code> is not recognized, the installer did not add it to your PATH. Run it by its full path:</div>
+        <div class="copy-row"><code id="cc-path-run">&amp; "$env:USERPROFILE\\.local\\bin\\claude.exe"</code><button class="btn btn-outline btn-copy" onclick="copyText('cc-path-run')">Copy</button></div>
+        <div class="exec-hint">Or add it to PATH once, then open a new terminal:</div>
+        <div class="copy-row"><code id="cc-path-add">[Environment]::SetEnvironmentVariable("Path", $env:Path + ";$env:USERPROFILE\\.local\\bin", "User")</code><button class="btn btn-outline btn-copy" onclick="copyText('cc-path-add')">Copy</button></div>
+        <div class="exec-hint">Connecting from this page works either way.</div>
       </div>
       <div class="next-box" id="cc-next" style="display:none">Next: open Claude Code in any folder and type <code>/generate-sad</code>, or ask it to list the SPEAKMAN.AI workflows. If Claude Code was already open, restart it first.</div>
       <div class="exec-hint" id="skills-status"></div>
@@ -2250,7 +2262,8 @@ async function refreshAssistantStatus(announce) {{
   try {{ st = await (await fetch('/api/assistant-status')).json(); }} catch (e) {{ $('cc-status').textContent = 'Could not check for Claude Code.'; return; }}
   const cc = st.claude_code;
   $('cc-ready').style.display = cc.detected ? 'block' : 'none';
-  $('cc-missing').style.display = cc.detected ? 'none' : 'block';
+  $('cc-missing').style.display = cc.cli_found ? 'none' : 'block';
+  $('cc-path').style.display = cc.windows && !cc.cli_on_path ? 'block' : 'none';
   $('cc-next').style.display = cc.registered ? 'block' : 'none';
   $('cc-hint').style.display = cc.registered ? 'none' : 'block';
   const btn = $('cc-connect');
@@ -2259,11 +2272,14 @@ async function refreshAssistantStatus(announce) {{
     $('cc-status').textContent = 'Connected to Claude Code.';
     btn.textContent = 'Reconnect Claude Code';
     btn.className = 'btn btn-outline';
-  }} else if (cc.detected) {{
+  }} else if (cc.cli_found) {{
     $('cc-dot').className = 'status-dot';
     $('cc-status').textContent = 'Claude Code found. Not connected yet.';
     btn.textContent = 'Connect Claude Code';
     btn.className = 'btn btn-primary';
+  }} else if (cc.detected) {{
+    $('cc-dot').className = 'status-dot warn';
+    $('cc-status').textContent = 'Claude Code settings found, but not the claude command that Connect needs.';
   }} else {{
     $('cc-dot').className = 'status-dot warn';
     $('cc-status').textContent = 'Claude Code was not found on this computer.';
@@ -2271,7 +2287,7 @@ async function refreshAssistantStatus(announce) {{
   modelConfigured = st.model_api_configured;
   execMode = st.execution_mode;
   renderRunner();
-  if (announce) showToast(cc.detected ? 'Claude Code found.' : 'Still not found. Install Claude Code and run it once.', !cc.detected);
+  if (announce) showToast(cc.cli_found ? 'Claude Code found.' : 'Still not found. Install Claude Code and run it once.', !cc.cli_found);
 }}
 
 async function connectClient(name) {{
