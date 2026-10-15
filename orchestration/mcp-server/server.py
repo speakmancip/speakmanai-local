@@ -2250,7 +2250,7 @@ def _build_setup_html(cfg: dict) -> str:
   <div class="section">
     <h2>Connect your AI assistant</h2>
     <div class="radio-group" id="assistant-group">
-      <label data-a="claude_code" onclick="setAssistant('claude_code')">Claude Code</label>
+      <label data-a="claude_code" onclick="setAssistant('claude_code')">Claude Code (CLI)</label>
       <label data-a="claude_app" onclick="setAssistant('claude_app')">Claude app</label>
       <label data-a="copilot" onclick="setAssistant('copilot')">Copilot Studio</label>
       <label data-a="cursor" onclick="setAssistant('cursor')">Cursor</label>
@@ -2275,7 +2275,7 @@ def _build_setup_html(cfg: dict) -> str:
           <li>Press Check again.</li>
         </ol>
       </div>
-      <div class="next-box" id="cc-next" style="display:none">Next: open Claude Code in any folder and type <code>/generate-sad</code>. Restart it first if it was already open.<br>Using the chat side of the Claude app? Use the Claude app tab above.</div>
+      <div class="next-box" id="cc-next" style="display:none">Next: open Claude Code in any folder and type <code>/generate-sad</code>. Restart it first if it was already open.<br>Claude Code inside the Claude app uses this same connection. Using the chat side of the Claude app? Use the Claude app tab above.</div>
       <div class="exec-hint" id="skills-status"></div>
       <button class="btn btn-outline" id="skills-btn" onclick="installSkills()" style="display:none; margin-top:6px;">Install skills for Claude Code</button>
       <details class="sub" id="cc-path" style="display:none">
