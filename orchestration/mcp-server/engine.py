@@ -541,7 +541,14 @@ async def transition_completed_or_cancelled_to_draft(session_id: str, db) -> boo
     return getattr(result, "matched_count", 0) > 0
 
 
-async def _emit_advance_event(session_id: str, db, queue: asyncio.Queue, workflow_def: dict, current_step_idx: int, agent_id: str, content: str, cascade: dict = None, hitl_cap_reached: bool = False):
+def _carry_provenance(source_outputs: dict) -> dict:
+    """The who-did-it record kept on a step's output: executed_by (who produced it), validated_by
+    (the validator that checked it, or why it was skipped) and gate_answered_by (who answered a
+    human review gate). Copied from an earlier output event so a later event for the same output keeps it."""
+    return {k: source_outputs[k] for k in ("executed_by", "validated_by", "gate_answered_by") if source_outputs.get(k)}
+
+
+async def _emit_advance_event(session_id: str, db, queue: asyncio.Queue, workflow_def: dict, current_step_idx: int, agent_id: str, content: str, cascade: dict = None, hitl_cap_reached: bool = False, prov: dict = None):
     """Advances the workflow past current_step_idx using `content` as the accepted output of
     agent_id, or marks the session COMPLETED if this was the final step. Shared by the plain
     AI-step path, the delegate-resume path, and the AI_VALIDATOR/HITL_VALIDATOR PASS paths —
@@ -570,7 +577,7 @@ async def _emit_advance_event(session_id: str, db, queue: asyncio.Queue, workflo
     }
     if hitl_cap_reached:
         attrs["hitl_cap_reached"] = "true"
-    exec_ctx = {"source_outputs": {"source_agent_id": agent_id, "content": content}}
+    exec_ctx = {"source_outputs": {"source_agent_id": agent_id, "content": content, **(prov or {})}}
 
     if cascade and not is_final:
         attrs["update_loop"] = str(cascade.get("loop", 0))
@@ -610,7 +617,7 @@ async def _emit_advance_event(session_id: str, db, queue: asyncio.Queue, workflo
         await queue.put({"action": "process_step", "session_id": session_id})
 
 
-async def _maybe_gate_by_hitl(session_id: str, db, queue: asyncio.Queue, workflow_def: dict, current_step_idx: int, agent_id: str, content: str, hitl_loop: int = 0, cascade: dict = None):
+async def _maybe_gate_by_hitl(session_id: str, db, queue: asyncio.Queue, workflow_def: dict, current_step_idx: int, agent_id: str, content: str, hitl_loop: int = 0, cascade: dict = None, prov: dict = None):
     """Checks whether agent_id declares a humanFeedbackId. If so, pauses the workflow for
     human review instead of advancing (current_step_index stays pinned to agent_id's step,
     exactly like an AI_VALIDATOR retry does). Otherwise advances normally via _emit_advance_event.
@@ -620,7 +627,7 @@ async def _maybe_gate_by_hitl(session_id: str, db, queue: asyncio.Queue, workflo
     hitl_agent_id = agent_config.get("humanFeedbackId") if agent_config else None
 
     if not hitl_agent_id:
-        await _emit_advance_event(session_id, db, queue, workflow_def, current_step_idx, agent_id, content, cascade=cascade)
+        await _emit_advance_event(session_id, db, queue, workflow_def, current_step_idx, agent_id, content, cascade=cascade, prov=prov)
         return
 
     max_loops = int((agent_config or {}).get("humanFeedbackConfig", {}).get("maxLoops", 3))
@@ -630,7 +637,7 @@ async def _maybe_gate_by_hitl(session_id: str, db, queue: asyncio.Queue, workflo
         # for a review round that would never resolve. hitl_cap_reached is a discoverable marker
         # in the event log for anyone auditing why this agent didn't get a final human sign-off.
         log.warning(f"[{session_id}] Agent {agent_id}: HITL loop budget ({max_loops}) exhausted. Advancing with the latest regenerated content instead of pausing again.")
-        await _emit_advance_event(session_id, db, queue, workflow_def, current_step_idx, agent_id, content, cascade=cascade, hitl_cap_reached=True)
+        await _emit_advance_event(session_id, db, queue, workflow_def, current_step_idx, agent_id, content, cascade=cascade, hitl_cap_reached=True, prov=prov)
         return
 
     log.info(f"[{session_id}] Agent {agent_id} requires human review by {hitl_agent_id}. Pausing (loop {hitl_loop})...")
@@ -652,7 +659,7 @@ async def _maybe_gate_by_hitl(session_id: str, db, queue: asyncio.Queue, workflo
         "attributes": pause_attrs,
         "data": {
             "workflow_definition": workflow_def,
-            "execution_context": {"source_outputs": {"source_agent_id": agent_id, "content": content}}
+            "execution_context": {"source_outputs": {"source_agent_id": agent_id, "content": content, **(prov or {})}}
         }
     }
     await _log_event_to_db(session_id, pause_event, db)
@@ -693,7 +700,14 @@ async def _handle_hitl_response(event: dict, queue: asyncio.Queue):
         feedback = raw_response
 
     if status == "Approved":
-        await _emit_advance_event(session_id, db, queue, workflow_def, current_step_idx, origin_agent_id, origin_content, cascade=cascade)
+        # The engine cannot tell a person's answer from the assistant answering for them: both
+        # arrive through submit_response. So the gate is recorded as answered through the client.
+        prov = _carry_provenance(latest_event["data"]["execution_context"]["source_outputs"])
+        answered = dict(event.get("executed_by") or {"kind": "client_reported"})
+        answered["answered_through"] = "the connected client"
+        answered["mode"] = await _get_exec_mode(db)
+        prov["gate_answered_by"] = answered
+        await _emit_advance_event(session_id, db, queue, workflow_def, current_step_idx, origin_agent_id, origin_content, cascade=cascade, prov=prov)
         return
 
     # "Update" — retry the origin agent with the human's feedback injected, even on what may be
@@ -1097,7 +1111,8 @@ async def _handle_resume(event: dict, queue: asyncio.Queue):
                 "execution_context": {
                     "source_outputs": {
                         "source_agent_id": agent_id,
-                        "content": content
+                        "content": content,
+                        "executed_by": {**(event.get("executed_by") or {"kind": "client_reported"}), "mode": exec_mode},
                     }
                 }
             }
@@ -1119,6 +1134,12 @@ async def _handle_resume(event: dict, queue: asyncio.Queue):
     hitl_loop = int(latest_event.get("attributes", {}).get("hitl_loop", "0"))
     cascade = _extract_cascade(latest_event)
 
+    # Who produced this output: the connected client. What it says about itself came with
+    # submit_response and is not checked; the execution mode is the engine's own record.
+    who = dict(event.get("executed_by") or {"kind": "client_reported"})
+    who["mode"] = await _get_exec_mode(db)
+    prov = {"executed_by": who}
+
     # --- Validation Check (delegated/paused steps) ---
     # Mirrors the check in _handle_process_step: a delegate agent's output
     # never passes through that function, so it must be validated here instead.
@@ -1138,12 +1159,13 @@ async def _handle_resume(event: dict, queue: asyncio.Queue):
             "validation_loop": validation_loop,
             "hitl_loop": hitl_loop,
             "cascade": cascade,
-            "source_outputs": {"source_agent_id": agent_id, "content": content}
+            "source_outputs": {"source_agent_id": agent_id, "content": content},
+            "prov": prov,
         })
         return
 
     log.info(f"[{session_id}] Resumed by local user.")
-    await _maybe_gate_by_hitl(session_id, db, queue, workflow_def, current_step_index, agent_id, content, hitl_loop, cascade=cascade)
+    await _maybe_gate_by_hitl(session_id, db, queue, workflow_def, current_step_index, agent_id, content, hitl_loop, cascade=cascade, prov=prov)
 
 
 async def _handle_process_step(event: dict, queue: asyncio.Queue):
@@ -1274,6 +1296,10 @@ async def _handle_process_step(event: dict, queue: asyncio.Queue):
         await db["events_raw"].update_one({"session_id": session_id}, {"$set": {"current_status": "FAILED", "error_message": str(e)}})
         return
 
+    # Who produced this output: the engine itself, on the configured model.
+    prov = {"executed_by": {"kind": "engine_model", "provider": LLM_PROVIDER, "model": model_name,
+                            "mode": await _get_exec_mode(db)}}
+
     # --- Validation Check ---
     validator_agent_id = agent_config.get("validatorAgentId")
     if validator_agent_id:
@@ -1289,12 +1315,13 @@ async def _handle_process_step(event: dict, queue: asyncio.Queue):
             "validation_loop": validation_loop,
             "hitl_loop": hitl_loop,
             "cascade": cascade,
-            "source_outputs": latest_event["data"]["execution_context"]["source_outputs"]
+            "source_outputs": latest_event["data"]["execution_context"]["source_outputs"],
+            "prov": prov,
         })
         return
 
     # No validator configured (or it already passed) — check the HITL gate before advancing.
-    await _maybe_gate_by_hitl(session_id, db, queue, workflow_def, current_step_idx, agent_id, llm_output, hitl_loop, cascade=cascade)
+    await _maybe_gate_by_hitl(session_id, db, queue, workflow_def, current_step_idx, agent_id, llm_output, hitl_loop, cascade=cascade, prov=prov)
 
 
 async def _handle_validate_step(event: dict, queue: asyncio.Queue):
@@ -1309,6 +1336,8 @@ async def _handle_validate_step(event: dict, queue: asyncio.Queue):
     hitl_loop = event.get("hitl_loop", 0)
     cascade = event.get("cascade")
     original_source_outputs = event["source_outputs"]
+    prov = dict(event.get("prov") or {})
+    validated_by = {"agent": validator_agent_id, "skipped": "validator not found"}
 
     db = get_db(os.environ.get("RAW_EVENTS_DB_NAME", "speakmanai_db"))
     session_doc = await db["events_raw"].find_one({"session_id": session_id})
@@ -1327,6 +1356,7 @@ async def _handle_validate_step(event: dict, queue: asyncio.Queue):
         skip_reason = "model API paused (delegate_only mode)" if exec_mode == "delegate_only" else "no model API configured"
         log.warning(f"[{session_id}] {skip_reason}. Skipping validator {validator_agent_id} for {agent_id} (auto-pass).")
         score, feedback, max_loops, min_score, val_output = 10, f"Validation skipped: {skip_reason}.", 0, 0.0, "Validation skipped."
+        validated_by = {"agent": validator_agent_id, "skipped": skip_reason}
         await _log_event_to_db(session_id, {
             "event_id": str(uuid.uuid4()),
             "publish_time": datetime.now(timezone.utc).isoformat(),
@@ -1347,6 +1377,8 @@ async def _handle_validate_step(event: dict, queue: asyncio.Queue):
             validator_user_content += f"\n\n{dep_context}"
 
         log.info(f"[{session_id}] Running validation loop {validation_loop+1}/{max_loops} with {validator_agent_id}...")
+        validated_by = {"agent": validator_agent_id, "kind": "engine_model", "provider": LLM_PROVIDER,
+                        "model": validator_config.get("model", DEFAULT_MODEL)}
         try:
             val_output = await _call_llm(
                 system_prompt=validator_config.get("systemPrompt", ""),
@@ -1387,7 +1419,10 @@ async def _handle_validate_step(event: dict, queue: asyncio.Queue):
 
         # PASS! Check the HITL gate before advancing to the next workflow step —
         # this is what makes "AI validator first, then HITL" work when both are configured.
-        await _maybe_gate_by_hitl(session_id, db, queue, workflow_def, current_step_idx, agent_id, content_to_validate, hitl_loop, cascade=cascade)
+        if "skipped" not in validated_by:
+            validated_by["score"] = score
+        prov["validated_by"] = validated_by
+        await _maybe_gate_by_hitl(session_id, db, queue, workflow_def, current_step_idx, agent_id, content_to_validate, hitl_loop, cascade=cascade, prov=prov)
 
     else:
         # FAIL! Retry the exact same step with the feedback injected.

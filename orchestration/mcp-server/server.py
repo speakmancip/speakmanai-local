@@ -240,6 +240,31 @@ async def start_session(
     }, indent=2)
 
 
+def _caller_descriptor(mcp_ctx, self_reported: str) -> dict:
+    """What the run record keeps about whoever called submit_response. The name is what the client
+    says; the user agent and the connection (local, or which remote token) come from the request."""
+    import hashlib
+    who = {"kind": "client_reported"}
+    name = (self_reported or "").strip()
+    if name:
+        who["name"] = name[:120]
+    try:
+        scope = mcp_ctx.request_context.request.scope
+        headers = dict(scope.get("headers") or [])
+        ua = headers.get(b"user-agent", b"").decode("latin-1").strip()
+        if ua:
+            who["user_agent"] = ua[:120]
+        local = _host_of(headers) in _LOCAL_HOSTS and not any(h in headers for h in _FORWARDED_HEADERS)
+        if local:
+            who["connection"] = "local"
+        else:
+            _, token = _remote_settings()
+            who["connection"] = ("remote, token " + hashlib.sha256(token.encode()).hexdigest()[:8]) if _token_ok(headers, token) else "remote"
+    except Exception:
+        pass
+    return who
+
+
 # ─────────────────────────────────────────────
 # Tool 3: submit_response  (generic HITL resume)
 # ─────────────────────────────────────────────
@@ -249,6 +274,8 @@ async def submit_response(
     session_id: str = "",
     sid: str = "",
     pause_id: str = "",
+    executed_by: str = "",
+    mcp_ctx: Context = None,
 ) -> str:
     """
     Submit your response to a workflow that is waiting for input (status=AWAITING_INPUT).
@@ -270,8 +297,11 @@ async def submit_response(
                     Optional, but always pass it: it guarantees your response is applied to the
                     pause you actually read, and is rejected if the workflow has since moved on
                     (e.g. a repeated submit would otherwise land on the NEXT pause).
+        executed_by: Optional. Who is answering, for the run record: your assistant name and model,
+                    for example "Claude Code, claude-sonnet-5-5". It is stored as reported by you.
     """
     session_id = _need_session_id(session_id, sid)
+    caller = _caller_descriptor(mcp_ctx, executed_by)
     if not response or not response.strip():
         raise ValueError("response must be a non-empty string.")
     if len(response) > 50000:
@@ -350,6 +380,7 @@ async def submit_response(
             "hitl_agent_id": agent_id,
             "origin_agent_id": mcp_input_config.get("origin_agent_id", ""),
             "user_id": "local_user",
+            "executed_by": caller,
         })
     else:
         # Push resume event to internal local queue
@@ -359,7 +390,8 @@ async def submit_response(
             "content": response,
             "current_step_index": step_index,
             "agentId": agent_id,
-            "user_id": "local_user"
+            "user_id": "local_user",
+            "executed_by": caller,
         })
 
     return json.dumps({
@@ -784,6 +816,7 @@ def _aggregate_agent_index(events: list, human_agents: set) -> dict:
                         "content": src.get("content", ""),
                         "mime_type": src.get("mime_type", "text/plain"),
                         "index": step_index,
+                        **{k: src[k] for k in ("executed_by", "validated_by", "gate_answered_by") if src.get(k)},
                     }
             step_index += 1
     return agent_index
@@ -836,6 +869,7 @@ async def get_outputs(mcp_ctx: Context, session_id: str = "", sid: str = "") -> 
             "description": f"Output from {agent_id}",
             "mime_type": meta["mime_type"],
             "index": meta["index"],
+            **{k: meta[k] for k in ("executed_by", "validated_by", "gate_answered_by") if k in meta},
         }
         for agent_id, meta in sorted(agent_index.items(), key=lambda x: x[1]["index"])
     ]
@@ -859,6 +893,14 @@ async def get_outputs(mcp_ctx: Context, session_id: str = "", sid: str = "") -> 
         "workflow_id": workflow_id,
         "status": current_status,
         "agent_count": len(available_outputs),
+        "run_record_note": (
+            "executed_by says who produced each output: kind engine_model means the engine ran the step on the "
+            "named model; kind client_reported means a connected client did, and its name is what it reported "
+            "about itself. validated_by shows the validator that checked the output, or why it was skipped. "
+            "gate_answered_by shows who answered a human review gate; the engine cannot tell a person from "
+            "the assistant answering for them. Report these as recorded and do not describe a run as "
+            "independently reviewed unless they show it."
+        ),
         "available_outputs": available_outputs,
         "document_capabilities": document_capabilities,
         "suggested_next_steps": (
