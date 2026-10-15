@@ -408,6 +408,19 @@ async def submit_response(
 # ─────────────────────────────────────────────
 # Tool 5: poll_workflow
 # ─────────────────────────────────────────────
+def _request_preview(events: list, limit: int = 200) -> str:
+    """The start of the request the session was started with, so a session can be recognised
+    weeks later. It is stored as the planner's output on the first event."""
+    try:
+        text = events[0]["data"]["execution_context"]["source_outputs"]["content"]
+    except (IndexError, KeyError, TypeError):
+        return ""
+    if not isinstance(text, str):
+        return ""
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit].rstrip() + "..."
+
+
 @mcp.tool(name="poll_workflow", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
 async def poll_workflow(mcp_ctx: Context, session_id: str = "", sid: str = "") -> str:
     """
@@ -418,6 +431,7 @@ async def poll_workflow(mcp_ctx: Context, session_id: str = "", sid: str = "") -
         sid:        Same as session_id. Use it only if your client drops arguments named session_id.
 
     Returns:
+        title and request_preview (what the session was started with),
         status (IN_PROGRESS | AWAITING_CAPABILITIES | COMPLETED | FAILED),
         completed_steps list, and outputs dict keyed by agent_id when COMPLETED.
     """
@@ -480,6 +494,8 @@ async def poll_workflow(mcp_ctx: Context, session_id: str = "", sid: str = "") -
 
     result = {
         "session_id": session_id,
+        "title": doc.get("session_title", ""),
+        "request_preview": _request_preview(events),
         "status": current_status,
         "completed_steps": completed_steps,
     }
@@ -890,6 +906,7 @@ async def get_outputs(mcp_ctx: Context, session_id: str = "", sid: str = "") -> 
     return json.dumps({
         "session_id": session_id,
         "title": title,
+        "request_preview": _request_preview(events),
         "workflow_id": workflow_id,
         "status": current_status,
         "agent_count": len(available_outputs),
@@ -994,6 +1011,8 @@ async def list_sessions(limit: int = 10) -> str:
         List of sessions ordered by most recent first, each with:
           session_id - pass to poll_workflow, get_outputs, get_output, cancel_session
           title - the title supplied to start_session
+          request_preview - the first 200 characters of the request the session was started with,
+                           to recognise which project a session was about
           workflow_id - identifies the workflow type and therefore the correct call chain
           status - one of:
                            COMPLETED          → call get_outputs then get_output to retrieve content
@@ -1041,6 +1060,7 @@ async def list_sessions(limit: int = 10) -> str:
         sessions.append({
             "session_id": doc["session_id"],
             "title": doc.get("session_title", ""),
+            "request_preview": _request_preview(events),
             "workflow_id": workflow_id_val,
             "status": status,
             "awaiting_input": status in ("AWAITING_INPUT", "AWAITING_CAPABILITIES"),
