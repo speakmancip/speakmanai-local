@@ -1773,6 +1773,28 @@ def _token_ok(headers: dict, token: str) -> bool:
     return bool(given) and hmac.compare_digest(given.encode(), token.encode())
 
 
+def _cross_site_write(scope, headers: dict) -> bool:
+    """True for a state-changing request to /api that a web page on another site sent through the
+    user's browser. Such a page can post text/plain JSON to localhost with no preflight, and the
+    handlers read the body as JSON whatever its type. A browser always sends Origin (or Sec-Fetch-Site)
+    on those posts; curl, scripts and the MCP clients send neither, so they are not affected."""
+    if scope.get("method", "GET") not in ("POST", "PUT", "PATCH", "DELETE"):
+        return False
+    if not scope.get("path", "").startswith("/api/"):
+        return False
+    if headers.get(b"sec-fetch-site", b"").decode("latin-1").strip().lower() == "cross-site":
+        return True
+    origin = headers.get(b"origin")
+    if origin is None:
+        return False
+    from urllib.parse import urlsplit
+    try:
+        host = urlsplit(origin.decode("latin-1").strip()).hostname or ""
+    except ValueError:
+        return True
+    return host not in ("localhost", "127.0.0.1", "::1")
+
+
 class RemoteAccessGate:
     """Pure ASGI middleware (no buffering, so MCP streaming is untouched)."""
 
@@ -1786,6 +1808,8 @@ class RemoteAccessGate:
         # A proxy that rewrites Host to localhost usually still adds a forwarding header.
         local = _host_of(headers) in _LOCAL_HOSTS and not any(h in headers for h in _FORWARDED_HEADERS)
         if local:
+            if _cross_site_write(scope, headers):
+                return await self._refuse(send, 403, "Refused: this request came from another website. Use the SpeakmanAI setup page itself.")
             return await self.app(scope, receive, send)
         enabled, token = _remote_settings()
         path = scope.get("path", "")

@@ -252,6 +252,8 @@ Copilot Studio cannot reach `localhost`, so it needs a public tunnel URL. The en
 
 Turn it on under **Remote access** (an Advanced fold) on the setup page. The token is created the first time and shown with a Copy button; **Make a new token** replaces it, which stops anything using the old one. Local use needs no token, and **Connect Claude Code** registers the plain `http://localhost:<port>/mcp` URL.
 
+Separately, the local `/api` refuses state-changing requests that a web page on another site sends through your browser (a request with an `Origin` from another site, or `Sec-Fetch-Site: cross-site`). The setup page, curl and scripts send neither and are unaffected. `/mcp` is not covered by this check, because MCP clients are not browsers.
+
 Limits to know about: the Host header is not proof of origin, so software on the same machine can claim to be local. The gate separates tunnels and proxies from local software, and a static key on a public URL narrows exposure but is not a secured cloud endpoint. Turn Remote access off and stop the tunnel when you are done. Not yet tested against a real Dev Tunnel or with Copilot Studio sending the key as a header.
 
 ### The run record
