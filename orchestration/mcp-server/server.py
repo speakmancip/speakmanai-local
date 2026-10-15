@@ -2246,7 +2246,7 @@ def _build_setup_html(cfg: dict) -> str:
       <option value="question">Question</option>
       <option value="updates">Keep me updated (product news by email)</option>
     </select>
-    <label class="field-label" id="fb-email-label">Your email (optional)</label>
+    <label class="field-label" id="fb-email-label">Your email (optional, add one if you want a reply)</label>
     <input type="email" id="fb-email" autocomplete="email" oninput="fbPreview()">
     <label class="field-label">Message</label>
     <textarea id="fb-message" rows="4" maxlength="5000" oninput="fbPreview()"></textarea>
@@ -2594,7 +2594,7 @@ function fbPreview() {{
 }}
 function fbChange() {{
   const updates = $('fb-type').value === 'updates';
-  $('fb-email-label').textContent = updates ? 'Your email (required)' : 'Your email (optional)';
+  $('fb-email-label').textContent = updates ? 'Your email (required)' : 'Your email (optional, add one if you want a reply)';
   $('fb-consent').style.display = updates ? 'block' : 'none';
   fbPreview();
 }}
