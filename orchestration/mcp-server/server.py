@@ -1908,6 +1908,52 @@ async def workflows_status():
         return JSONResponse({"state": "unavailable", "total": 0, "differs": [], "message": f"Could not check the workflows: {e}"})
 
 
+# Feedback goes to a public HubSpot form endpoint. No key is involved; the ids are not secrets.
+FEEDBACK_ENDPOINT = ("https://api.hsforms.com/submissions/v3/integration/submit/"
+                     "342296015/977a05a7-5bbb-4c98-b2f7-334cb0866219")
+FEEDBACK_TYPES = {"bug": "Bug report", "request": "Feature request",
+                  "question": "Question", "updates": "Keep me updated"}
+
+
+@app.post("/api/feedback")
+async def send_feedback(request: Request):
+    """Send one note the user wrote on the setup page. Only the type, the optional email and the message leave this computer."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "message": "That request was not valid."})
+    kind = FEEDBACK_TYPES.get(str(body.get("type", "")))
+    email = str(body.get("email", "")).strip()
+    message = str(body.get("message", "")).strip()
+    if not kind:
+        return JSONResponse({"ok": False, "message": "Choose what this is about."})
+    if kind == "Keep me updated" and not email:
+        return JSONResponse({"ok": False, "message": "Add your email address so we can send you updates."})
+    if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        return JSONResponse({"ok": False, "message": "That email address does not look right."})
+    if not message and kind != "Keep me updated":
+        return JSONResponse({"ok": False, "message": "Write a short message first."})
+    if len(message) > 5000:
+        return JSONResponse({"ok": False, "message": "Please keep the message under 5000 characters."})
+    fields = [{"name": "engagement_type", "value": "SpeakmanAI exe: " + kind},
+              {"name": "message", "value": message or "(no message)"}]
+    if email:
+        fields.append({"name": "email", "value": email})
+    payload = {"fields": fields,
+               "context": {"pageUri": "speakmanai-exe://setup", "pageName": "SpeakmanAI exe setup page"}}
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.post(FEEDBACK_ENDPOINT, json=payload)
+    except Exception as e:
+        log.warning(f"Feedback not sent: {e}")
+        return JSONResponse({"ok": False, "message": "Could not reach the server. Check your internet connection and try again. Nothing was sent."})
+    if r.status_code != 200:
+        log.warning(f"Feedback rejected: HTTP {r.status_code}")
+        return JSONResponse({"ok": False, "message": f"The server did not accept it (HTTP {r.status_code}). Nothing was saved. Try again later."})
+    log.info(f"Feedback sent: {kind}")
+    return JSONResponse({"ok": True, "message": "Sent. Thank you."})
+
+
 @app.post("/api/update-workflows")
 async def update_workflows():
     """Replace the shipped workflows that differ from this build. The replaced versions are backed up first."""
@@ -1964,7 +2010,8 @@ def _build_setup_html(cfg: dict) -> str:
   .radio-group label.active {{ border-color: #00ff7f; background: #021a0d; color: #00ff7f; }}
   .radio-group label:hover:not(.active) {{ border-color: #334155; color: #e2e8f0; }}
   label.field-label {{ display: block; font-size: 0.8rem; color: #64748b; margin-bottom: 4px; margin-top: 12px; }}
-  input[type=text], input[type=password], select {{ width: 100%; background: #0a0f1a; border: 1px solid #1e293b; border-radius: 6px; padding: 8px 12px; color: #e2e8f0; font-size: 0.875rem; }}
+  textarea {{ width: 100%; background: #0a0f1a; border: 1px solid #1e293b; border-radius: 6px; padding: 8px 12px; color: #e2e8f0; font-size: 0.875rem; font-family: inherit; resize: vertical; }}
+  input[type=text], input[type=email], input[type=password], select {{ width: 100%; background: #0a0f1a; border: 1px solid #1e293b; border-radius: 6px; padding: 8px 12px; color: #e2e8f0; font-size: 0.875rem; }}
   input:focus, select:focus {{ outline: none; border-color: #00ff7f; box-shadow: 0 0 0 2px rgba(0,255,127,0.12); }}
   select option {{ background: #111827; }}
   .btn {{ display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; border-radius: 8px; font-size: 0.875rem; font-weight: 600; cursor: pointer; border: none; transition: all 0.15s; }}
@@ -2187,6 +2234,24 @@ def _build_setup_html(cfg: dict) -> str:
     </select>
     <div class="exec-hint" id="exec-hint"></div>
     <button class="btn btn-outline" style="margin-top:10px" onclick="saveMode()">Apply mode</button>
+  </details>
+
+  <details class="fold" id="fb-fold">
+    <summary>Send feedback <span class="opt">optional</span></summary>
+    <label class="field-label">What is this about?</label>
+    <select id="fb-type" onchange="fbChange()">
+      <option value="bug">Bug report</option>
+      <option value="request">Feature request</option>
+      <option value="question">Question</option>
+      <option value="updates">Keep me updated (product news by email)</option>
+    </select>
+    <label class="field-label" id="fb-email-label">Your email (optional)</label>
+    <input type="email" id="fb-email" autocomplete="email" oninput="fbPreview()">
+    <label class="field-label">Message</label>
+    <textarea id="fb-message" rows="4" maxlength="5000" oninput="fbPreview()"></textarea>
+    <div class="exec-hint" id="fb-preview"></div>
+    <div class="exec-hint" id="fb-consent" style="display:none">By sending this you agree to receive product emails from SPEAKMAN.AI. You can unsubscribe at any time.</div>
+    <button class="btn btn-outline" style="margin-top:10px" onclick="sendFeedback()">Send</button>
   </details>
 </div>
 
@@ -2517,6 +2582,34 @@ async function saveMode() {{
   showToast(d.ok ? (needsApi ? 'Mode applied, but no model API is set up, so those steps will fail.' : 'Mode applied.') : d.message, !d.ok || needsApi);
   renderRunner();
 }}
+
+// ---- Feedback ----
+const FB_LABELS = {{ bug: 'Bug report', request: 'Feature request', question: 'Question', updates: 'Keep me updated' }};
+function fbPreview() {{
+  const t = $('fb-type').value, email = $('fb-email').value.trim();
+  $('fb-preview').textContent = 'This sends only: the type (' + FB_LABELS[t] + '), '
+    + (email ? 'your email (' + email + '), ' : 'no email, ')
+    + 'and the message above, to SPEAKMAN.AI through HubSpot. Nothing else leaves this computer: no workflow data, documents or settings.';
+}}
+function fbChange() {{
+  const updates = $('fb-type').value === 'updates';
+  $('fb-email-label').textContent = updates ? 'Your email (required)' : 'Your email (optional)';
+  $('fb-consent').style.display = updates ? 'block' : 'none';
+  fbPreview();
+}}
+async function sendFeedback() {{
+  const body = {{ type: $('fb-type').value, email: $('fb-email').value, message: $('fb-message').value }};
+  let d;
+  try {{
+    const r = await fetch('/api/feedback', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(body) }});
+    d = await r.json();
+  }} catch (e) {{
+    d = {{ ok: false, message: 'Could not send. Nothing was sent.' }};
+  }}
+  showToast(d.message, !d.ok);
+  if (d.ok) {{ $('fb-message').value = ''; fbPreview(); }}
+}}
+fbChange();
 
 // ---- Shared ----
 async function copyText(id) {{
