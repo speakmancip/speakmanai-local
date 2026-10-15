@@ -47,6 +47,9 @@ A closed **Send feedback** section posts a bug report, feature request, question
 - **Default models** are now Claude Haiku 5.5, Sonnet 5.5 and Opus 5.5, and OpenAI gpt-6-luna, gpt-6.1-sol and gpt-6-astra (fast, standard, advanced). Gemini and Vertex AI defaults are unchanged. Saved configs that pin an older model keep using it until you save the setup page again. Older models stay selectable.
 - **HTML is opt-in.** The SAD and compliance report skills produce HTML only when you ask. A client that can run Python renders it locally with `scripts/render_html.py`, which the exe installs with the skills. `render_document` stays for clients with no shell, such as Copilot Studio.
 - **Smaller pauses.** In delegate mode, a pause used to repeat the full text of every output it depended on. When those total more than 20,000 characters, large outputs are now listed by agent and size, with an instruction to use your own copy or fetch it with `get_output`. One pause in a Claude app run had reached 73,540 characters, over that app's result limit. A delegated planner also no longer passes its agent list to every later agent.
+- **Find an old session by what it was about.** `list_sessions`, `poll_workflow` and `get_outputs` now return a `request_preview`, the first 200 characters of the request the session was started with, and `poll_workflow` returns the title as well. A session can sit for weeks between steps, and nobody remembers a session id. An assistant can match "the SAD about the bowling alley ecommerce tool" against the title and preview, then read the Business Context Clarifier output for the detail. Nothing times out: a session waits as long as it needs to.
+- **The exe ignores model keys it finds in your environment.** Before, a key such as `ANTHROPIC_API_KEY` set for another tool counted as a configured model API, so a first run started in `auto` and every step and validator was billed to that account. The packaged exe now uses only what you save on the setup page. Docker and run-from-source still read the environment. Start the exe with `SPEAKMANAI_USE_ENV=1` to keep the old behaviour.
+- **The Claude Code tab is labelled "Claude Code (CLI)".** Claude Code inside the Claude app uses the same connection, and the page now says so. The "Claude app" tab is the chat side.
 - **`sid` as well as `session_id`.** The eight tools that take a session id accept `sid` too. The Claude app's link to a local engine drops an argument named `session_id`, which broke every session tool there.
 - **Claude Code registration** now runs `claude mcp add --transport http --scope user speakmanai ...`. The old button wrote to `~/.claude/settings.json`, a file Claude Code does not read for MCP servers. The Claude Desktop and Cursor one-click buttons are gone; they shared that code and were never tested. The page shows the URL and command to copy.
 
@@ -61,6 +64,7 @@ A closed **Send feedback** section posts a bug report, feature request, question
 - **Workflows:** open the setup page and press **Update workflows** if the amber box appears. Before that, a database made by an older version keeps old prompts and review gates, and the planner may still offer the retired Technical Writer.
 - **Skills:** press the install or update button on the setup page to receive the new skill set.
 - **Tunnels and Copilot Studio:** a tunnel will now get a 403 until you turn on Remote access, and then Copilot Studio needs the token sent as an API key header. Set that up before relying on an existing tunnel.
+- **Keys in your environment:** if you relied on the exe reading a model key from an environment variable, save it on the setup page instead, or start the exe with `SPEAKMANAI_USE_ENV=1`.
 - **Models:** an install with a pinned Claude or OpenAI model keeps it. Choose the new defaults on the setup page if you want them.
 - **Docker and run-from-source** users configure the model through `.env` and are not migrated automatically.
 
@@ -68,6 +72,7 @@ A closed **Send feedback** section posts a bug report, feature request, question
 
 - Windows: a first install on a clean machine with the signed build, including the SmartScreen prompt, and a run of the chat side of the Claude app after connecting. The unsigned build passed one pass in Windows Sandbox.
 - A run with a real model API showing `engine_model` in the built exe, and Mongo-backed mode for the new run record fields and the workflow update.
+- An environment variable at user level (not just one shell) holding a key, to see that the exe ignores it, and the new `request_preview` in the built exe.
 - The feedback section when offline or when HubSpot rejects the post.
 - Cursor and Codex, which are labelled untested on the setup page.
 - Copilot Studio cost for the full SAD run, which may not show until the monthly bill.
