@@ -1910,7 +1910,7 @@ async def workflows_status():
 
 # Feedback goes to a public HubSpot form endpoint. No key is involved; the ids are not secrets.
 FEEDBACK_ENDPOINT = ("https://api.hsforms.com/submissions/v3/integration/submit/"
-                     "342296015/977a05a7-5bbb-4c98-b2f7-334cb0866219")
+                     "342296015/ec0616e6-8af0-4be5-84c4-0e31dfd4e457")
 FEEDBACK_TYPES = {"bug": "Bug report", "request": "Feature request",
                   "question": "Question", "updates": "Keep me updated"}
 
@@ -1918,6 +1918,7 @@ FEEDBACK_TYPES = {"bug": "Bug report", "request": "Feature request",
 @app.post("/api/feedback")
 async def send_feedback(request: Request):
     """Send one note the user wrote on the setup page. Only the type, the optional email and the message leave this computer."""
+    # The form has three fields: feedback_type (one of FEEDBACK_TYPES), email and message.
     try:
         body = await request.json()
     except Exception:
@@ -1935,7 +1936,7 @@ async def send_feedback(request: Request):
         return JSONResponse({"ok": False, "message": "Write a short message first."})
     if len(message) > 5000:
         return JSONResponse({"ok": False, "message": "Please keep the message under 5000 characters."})
-    fields = [{"name": "engagement_type", "value": "SpeakmanAI exe: " + kind},
+    fields = [{"name": "feedback_type", "value": kind},
               {"name": "message", "value": message or "(no message)"}]
     if email:
         fields.append({"name": "email", "value": email})
