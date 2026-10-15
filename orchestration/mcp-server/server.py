@@ -1678,6 +1678,74 @@ def _write_config(cfg: dict) -> None:
     _CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
 
+# ── Remote access gate ───────────────────────
+# The engine listens on localhost. A tunnel (Dev Tunnels, ngrok) makes it reachable from the
+# internet, and nothing else here authenticates a caller. So: by default a request that does not
+# say it is for localhost is refused. With "Remote access" switched on, the MCP endpoint accepts
+# a request that carries the token. The setup page and /api never accept a non-local request.
+
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
+_FORWARDED_HEADERS = (b"x-forwarded-for", b"x-forwarded-host", b"forwarded")
+
+
+def _host_of(headers: dict) -> str:
+    host = headers.get(b"host", b"").decode("latin-1").strip().lower()
+    if host.startswith("["):
+        return host.split("]")[0] + "]"
+    return host.rsplit(":", 1)[0] if ":" in host else host
+
+
+def _remote_settings() -> tuple[bool, str]:
+    cfg = _read_config()
+    return bool(cfg.get("remote_access")), str(cfg.get("remote_token") or "")
+
+
+def _token_ok(headers: dict, token: str) -> bool:
+    import hmac
+    if not token:
+        return False
+    given = headers.get(b"x-api-key", b"").decode("latin-1").strip()
+    auth = headers.get(b"authorization", b"").decode("latin-1").strip()
+    if not given and auth.lower().startswith("bearer "):
+        given = auth[7:].strip()
+    return bool(given) and hmac.compare_digest(given.encode(), token.encode())
+
+
+class RemoteAccessGate:
+    """Pure ASGI middleware (no buffering, so MCP streaming is untouched)."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        headers = dict(scope.get("headers") or [])
+        # A proxy that rewrites Host to localhost usually still adds a forwarding header.
+        local = _host_of(headers) in _LOCAL_HOSTS and not any(h in headers for h in _FORWARDED_HEADERS)
+        if local:
+            return await self.app(scope, receive, send)
+        enabled, token = _remote_settings()
+        path = scope.get("path", "")
+        if not enabled:
+            return await self._refuse(send, 403, "Remote access is off. Turn it on in the SpeakmanAI setup page on the computer that runs it.")
+        if not (path == "/mcp" or path.startswith("/mcp/")):
+            return await self._refuse(send, 403, "The setup page and its API are only available on the computer that runs SpeakmanAI.")
+        if not _token_ok(headers, token):
+            return await self._refuse(send, 401, "A valid access token is required.")
+        return await self.app(scope, receive, send)
+
+    @staticmethod
+    async def _refuse(send, status: int, message: str):
+        body = json.dumps({"error": message}).encode()
+        await send({"type": "http.response.start", "status": status,
+                    "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
+
+
+app.add_middleware(RemoteAccessGate)
+
+
 def _apply_config_to_env(cfg: dict) -> None:
     mapping = {
         "llm_provider":      "LLM_PROVIDER",
@@ -1782,11 +1850,37 @@ async def setup_page():
 @app.get("/api/config")
 async def get_config():
     cfg = _read_config()
+    cfg.pop("remote_token", None)
     # Mask API keys
     for key in ("gemini_api_key", "anthropic_api_key", "openai_api_key"):
         if cfg.get(key):
             cfg[key] = cfg[key][:6] + "••••••••"
     return JSONResponse(cfg)
+
+
+@app.get("/api/remote-access")
+async def get_remote_access():
+    """Is remote access on, and what is the token? Only reachable from this computer (see RemoteAccessGate)."""
+    enabled, token = _remote_settings()
+    return JSONResponse({"enabled": enabled, "token": token})
+
+
+@app.post("/api/remote-access")
+async def set_remote_access(request: Request):
+    """Turn remote access on or off. The token is made the first time it is turned on; regenerate replaces it."""
+    import secrets
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "message": "That request was not valid."})
+    cfg = _read_config()
+    if "enabled" in body:
+        cfg["remote_access"] = bool(body["enabled"])
+    if body.get("regenerate") or (cfg.get("remote_access") and not cfg.get("remote_token")):
+        cfg["remote_token"] = secrets.token_urlsafe(32)
+    _write_config(cfg)
+    log.info(f"Remote access {'on' if cfg.get('remote_access') else 'off'}" + (" (token regenerated)" if body.get("regenerate") else ""))
+    return JSONResponse({"ok": True, "enabled": bool(cfg.get("remote_access")), "token": str(cfg.get("remote_token") or "")})
 
 
 @app.post("/api/config")
@@ -1795,6 +1889,9 @@ async def post_config(request: Request):
     # "use_model_api" is the setup page asking to run AI steps on the user's own model API.
     # It is a request, not a setting: the mode only becomes auto when an API is really set up.
     use_model_api = bool(body.pop("use_model_api", False))
+    # Remote access has its own endpoint; this one never changes it.
+    body.pop("remote_access", None)
+    body.pop("remote_token", None)
     mode = body.get("execution_mode")
     if mode is not None and mode not in _EXECUTION_MODES:
         return JSONResponse({"ok": False, "message": f"Invalid execution_mode: {mode!r}."}, status_code=400)
@@ -2237,6 +2334,18 @@ def _build_setup_html(cfg: dict) -> str:
     <button class="btn btn-outline" style="margin-top:10px" onclick="saveMode()">Apply mode</button>
   </details>
 
+  <details class="fold" id="ra-fold">
+    <summary>Remote access <span class="opt">optional</span><span class="fold-state" id="ra-state"></span></summary>
+    <div class="exec-hint">Off by default: only this computer can use SpeakmanAI. Turn it on only if a tool that runs somewhere else, such as Copilot Studio through a tunnel, has to reach it. Anyone who has the tunnel address and the token can run your engine, so turn it off and stop the tunnel when you are done.</div>
+    <div id="ra-on" style="display:none">
+      <label class="field-label">Access token</label>
+      <div class="copy-row"><code id="ra-token"></code><button class="btn btn-outline btn-copy" onclick="copyText('ra-token')">Copy</button></div>
+      <div class="exec-hint">Send it with each request as the header <code>x-api-key</code>, or as <code>Authorization: Bearer</code> followed by the token. Not yet tested with Copilot Studio.</div>
+      <button class="btn btn-outline" style="margin-top:10px" onclick="regenToken()">Make a new token</button>
+    </div>
+    <button class="btn btn-outline" style="margin-top:10px" id="ra-btn" onclick="toggleRemote()">Turn on</button>
+  </details>
+
   <details class="fold" id="fb-fold">
     <summary>Send feedback <span class="opt">optional</span></summary>
     <label class="field-label">What is this about?</label>
@@ -2583,6 +2692,31 @@ async function saveMode() {{
   showToast(d.ok ? (needsApi ? 'Mode applied, but no model API is set up, so those steps will fail.' : 'Mode applied.') : d.message, !d.ok || needsApi);
   renderRunner();
 }}
+
+// ---- Remote access ----
+let remoteOn = false;
+function renderRemote(d) {{
+  remoteOn = !!d.enabled;
+  $('ra-on').style.display = remoteOn ? 'block' : 'none';
+  $('ra-token').textContent = d.token || '';
+  $('ra-state').textContent = remoteOn ? 'on' : 'off';
+  $('ra-btn').textContent = remoteOn ? 'Turn off' : 'Turn on';
+}}
+async function postRemote(body) {{
+  const r = await fetch('/api/remote-access', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(body) }});
+  const d = await r.json();
+  if (d.ok) renderRemote(d); else showToast(d.message, true);
+  return d;
+}}
+async function toggleRemote() {{
+  const d = await postRemote({{ enabled: !remoteOn }});
+  if (d.ok) showToast(d.enabled ? 'Remote access is on. Turn it off when you are done.' : 'Remote access is off.');
+}}
+async function regenToken() {{
+  const d = await postRemote({{ regenerate: true }});
+  if (d.ok) showToast('New token made. The old one no longer works.');
+}}
+fetch('/api/remote-access').then(r => r.json()).then(renderRemote).catch(() => {{}});
 
 // ---- Feedback ----
 const FB_LABELS = {{ bug: 'Bug report', request: 'Feature request', question: 'Question', updates: 'Keep me updated' }};
