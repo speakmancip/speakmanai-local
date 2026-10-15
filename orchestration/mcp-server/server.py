@@ -2068,6 +2068,9 @@ async def workflows_status():
 
 
 # Feedback goes to a public HubSpot form endpoint. No key is involved; the ids are not secrets.
+# Shown on the setup page and sent with feedback. Bump it when a release is cut.
+APP_VERSION = "1.5.0"
+
 FEEDBACK_ENDPOINT = ("https://api.hsforms.com/submissions/v3/integration/submit/"
                      "342296015/ec0616e6-8af0-4be5-84c4-0e31dfd4e457")
 FEEDBACK_TYPES = {"bug": "Bug report", "request": "Feature request",
@@ -2100,7 +2103,7 @@ async def send_feedback(request: Request):
     if email:
         fields.append({"name": "email", "value": email})
     payload = {"fields": fields,
-               "context": {"pageUri": "speakmanai-exe://setup", "pageName": "SpeakmanAI exe setup page"}}
+               "context": {"pageUri": "speakmanai-exe://setup", "pageName": f"SpeakmanAI exe setup page v{APP_VERSION}"}}
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             r = await client.post(FEEDBACK_ENDPOINT, json=payload)
@@ -2426,6 +2429,8 @@ def _build_setup_html(cfg: dict) -> str:
     <button class="btn btn-outline" style="margin-top:10px" onclick="sendFeedback()">Send</button>
   </details>
 </div>
+
+<div class="exec-hint" id="app-version" style="text-align:center; margin:14px 0">SPEAKMAN.AI v{APP_VERSION}. Mention this version in any bug report.</div>
 
 <div class="toast" id="toast"></div>
 
@@ -2786,7 +2791,7 @@ function fbPreview() {{
   const t = $('fb-type').value, email = $('fb-email').value.trim();
   $('fb-preview').textContent = 'This sends only: the type (' + FB_LABELS[t] + '), '
     + (email ? 'your email (' + email + '), ' : 'no email, ')
-    + 'and the message above, to SPEAKMAN.AI through HubSpot. Nothing else leaves this computer: no workflow data, documents or settings.';
+    + 'the message above, and the app version (v{APP_VERSION}), to SPEAKMAN.AI through HubSpot. Nothing else leaves this computer: no workflow data, documents or settings.';
 }}
 function fbChange() {{
   const updates = $('fb-type').value === 'updates';

@@ -123,8 +123,8 @@ The setup page at `http://localhost:8000/setup` has a **Connect Claude Code** bu
 
 **Other assistants.** Setup is manual. Add the MCP server URL `http://localhost:8000/mcp` in the assistant's own settings (the setup page shows it with a copy button).
 
-- The Claude app (Desktop and Cowork): add the server by hand and upload the skills bundle by hand.
-- Microsoft Copilot Studio: it cannot reach `localhost`, so use a public tunnel URL. See `desktop-skills/COPILOT_STUDIO.md` in the `speakmanai-cc` repo.
+- The Claude app (chat side): add the server by hand and upload the skills bundle by hand. Claude Code inside the Claude app uses the Claude Code connection above.
+- Microsoft Copilot Studio: it cannot reach `localhost`, so use a public tunnel URL. A tunnel is refused until you turn on Remote access on the setup page, and then needs the token it shows (see [Remote access and tunnels](#remote-access-and-tunnels)). See `desktop-skills/COPILOT_STUDIO.md` in the `speakmanai-cc` repo.
 - Cursor and Codex: not tested.
 
 ---
@@ -234,6 +234,40 @@ Point it at the checkout with `--cc-dir PATH` or `SPEAKMANAI_CC_DIR`. By default
 
 A new install with no model API starts in Delegate Only mode, so workflows run through your connected assistant with no key.
 
+**Model keys in your environment are ignored by the exe.** A key such as `ANTHROPIC_API_KEY` set for another tool does not count as a model API, so it is never billed without you entering it on the setup page. Only `~/.speakmanai/config.json` counts. Start the exe with `SPEAKMANAI_USE_ENV=1` to use environment settings instead. Docker and run-from-source read the environment and `.env` as before.
+
+### Upgrading an existing install
+
+- **Workflows.** The exe only imports a bundled workflow that is missing from your database, so an older database keeps the prompts, review gates and agent lists it was created with. The setup page shows an amber box with an **Update workflows** button when yours differ. It replaces the shipped workflows with this version's, adds missing agents, unlinks retired ones, and first writes what it replaced to `~/.speakmanai/backups/workflows-<timestamp>.json`. Your own workflows and agents are not touched. To keep an edited shipped workflow, copy it to a new workflow ID first. It is a button, never automatic.
+- **Skills.** The Skills block on the setup page shows when an update is available. A file you edited is backed up under `~/.claude/speakmanai-cc/backups/` before it is replaced.
+- **Models.** A saved config that pins an older Claude or OpenAI model keeps it. Save the setup page again to move to the new defaults.
+
+### Remote access and tunnels
+
+Copilot Studio cannot reach `localhost`, so it needs a public tunnel URL. The engine treats any request that is not local (a Host other than `localhost`, `127.0.0.1` or `::1`, or a forwarding header such as `X-Forwarded-For`) as remote:
+
+- **Remote access off (default):** a remote request gets a 403 and nothing else happens. A tunnel does not work.
+- **Remote access on:** only `/mcp` is reachable remotely, and it needs the token on every request, sent as the header `x-api-key` or as `Authorization: Bearer <token>` (401 otherwise).
+- **Always local only:** `/setup` and `/api/*` never accept a remote request, so a tunnel cannot read the token, change settings or turn Remote access off.
+
+Turn it on under **Remote access** (an Advanced fold) on the setup page. The token is created the first time and shown with a Copy button; **Make a new token** replaces it, which stops anything using the old one. Local use needs no token, and **Connect Claude Code** registers the plain `http://localhost:<port>/mcp` URL.
+
+Limits to know about: the Host header is not proof of origin, so software on the same machine can claim to be local. The gate separates tunnels and proxies from local software, and a static key on a public URL narrows exposure but is not a secured cloud endpoint. Turn Remote access off and stop the tunnel when you are done. Not yet tested against a real Dev Tunnel or with Copilot Studio sending the key as a header.
+
+### The run record
+
+Each output records who produced it. `get_outputs` shows three fields per output:
+
+- `executed_by`: for a step the engine ran on its own model, the provider, model and execution mode (recorded by the engine). For a delegated step, the name the assistant reported through the optional `executed_by` argument of `submit_response`, the client's user agent, whether the connection was local or remote, and the mode. The reported name is stored as given and is not checked.
+- `validated_by`: the validator and its score, or why it was skipped (model API paused or not set up).
+- `gate_answered_by`: for an approved human review gate, that it was answered through the connected client. The engine cannot tell a person's answer from the assistant answering for them, so it never records "human approved".
+
+The record states facts and makes no claim of independent review: a run done by one assistant from start to finish reads that way.
+
+### Finding an old session
+
+A session can wait for weeks. `list_sessions` returns each session's title and a `request_preview` (the first 200 characters of the request it was started with), and `poll_workflow` and `get_outputs` return the same, so an assistant can find "the SAD about the bowling alley ecommerce tool" without a session ID. `get_output` on the Business Context Clarifier then gives the goal and scope. Nothing times out.
+
 Config is stored at `~/.speakmanai/config.json`. The SQLite database is at `~/.speakmanai/speakmanai.db`. Logs are at `~/.speakmanai/speakmanai.log`.
 
 ---
@@ -248,7 +282,11 @@ Use it to:
 - Pick your AI provider (Gemini, Claude, OpenAI, Vertex AI, Ollama), under **Model API**, which is optional
 - Enter your API key (or GCP project/region for Vertex AI, which uses Application Default Credentials instead) and choose fast / standard / advanced models
 - Set the execution mode directly, under **Advanced** (shown once a model API is set up)
-- Connect your AI assistant (one click for Claude Code; a copyable MCP URL for the others)
+- Update an older database to this version's workflows (**Update workflows**, shown only when something differs)
+- Turn **Remote access** on or off and copy the token, under **Advanced**
+- Send feedback to SPEAKMAN.AI, under **Advanced**. It lists exactly what it sends (the type, your optional email, your message and the app version) and sends nothing until you press Send
+
+The page footer shows the app version. Mention it in a bug report.
 
 ### Execution Modes
 

@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**SPEAKMAN.AI** is a local multi-agent workflow engine exposed entirely via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Connect it to your AI assistant — Claude Code, Claude Desktop, Cursor, or Microsoft Copilot Studio — and run sophisticated multi-step AI pipelines directly from your tools, against your own LLM provider, on your own machine.
+**SPEAKMAN.AI** is a local multi-agent workflow engine exposed entirely via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Connect it to your AI assistant — Claude Code, the Claude app, Cursor, or Microsoft Copilot Studio — and run sophisticated multi-step AI pipelines directly from your tools, against your own LLM provider, on your own machine.
 
 Built-in workflows cover the whole idea-to-architecture arc — **Sizing**, **Solution Architecture**, **Requirements Engineering**, **UX Design** — plus a **Workflow Builder** for creating your own pipelines. Every workflow is a coordinated chain of AI agents that collaborate, validate each other's outputs, and (where the task calls for it) pause for a real human review before continuing.
 
@@ -34,6 +34,12 @@ No Python, no Docker, no terminal required.
 5. Ask your assistant: *"List the available SPEAKMAN.AI workflows and start a session"*
 
 Config is saved to `~/.speakmanai/config.json`. Logs at `~/.speakmanai/speakmanai.log`.
+
+**Upgrading an existing install:** open the setup page and press **Update workflows** if the amber box appears (your stored workflows differ from the shipped ones; the old copies are backed up first), and press the skills update button. The packaged exe reads model keys only from the setup page, not from environment variables (start it with `SPEAKMANAI_USE_ENV=1` to keep the old behaviour). See [SETUP.md](SETUP.md).
+
+**Using a tunnel (Copilot Studio):** the setup page's **Remote access** section is off by default, so a public tunnel is refused until you turn it on, and then `/mcp` needs the token it shows. `/setup` stays local only. Do not leave a tunnel running. See [SETUP.md](SETUP.md#remote-access-and-tunnels).
+
+**Feedback:** a closed **Send feedback** section on the setup page sends a bug report, request or question to SPEAKMAN.AI. It shows exactly what it sends and sends nothing until you press Send.
 
 ---
 
@@ -174,9 +180,9 @@ Switch modes at any time via the setup page or: *"Set execution mode to delegate
 | `start_session` | Start a new workflow pipeline — returns a session_id immediately |
 | `poll_workflow` | Check status of a running session |
 | `submit_response` | Provide input when a workflow reaches AWAITING_INPUT |
-| `get_outputs` | Get the manifest of completed agent outputs |
+| `get_outputs` | Get the manifest of completed agent outputs, with the run record for each (`executed_by`, `validated_by`, `gate_answered_by`) |
 | `get_output` | Fetch the full content of a specific agent's output |
-| `list_sessions` | List recent sessions — use to recover a lost session_id |
+| `list_sessions` | List recent sessions with a title and a `request_preview` (the start of the original request) — use to recover a lost session_id, even weeks later |
 | `cancel_session` | Cancel a stuck or failed session |
 | `update_session` | Revise one agent's output in a completed session and cascade the change through everything downstream — no re-run from scratch |
 | `set_execution_mode` | Switch between auto / force_delegate / force_background / delegate_only |
@@ -210,6 +216,7 @@ speakmanai-local/
     ├── database.py                      # Database router (SQLite / MongoDB)
     ├── database_sqlite.py               # SQLite async adapter
     ├── skills_installer.py              # Installs the bundled skills into Claude Code
+    ├── workflows_sync.py                # Update workflows: brings a database up to the shipped workflows
     ├── requirements.txt                 # Docker/server dependencies
     └── requirements-desktop.txt        # Desktop exe dependencies
 ```
@@ -250,7 +257,7 @@ curl http://localhost:8000/health
 | Skill | Command | What it does |
 |---|---|---|
 | Project Brief | `/generate-project-brief` | Coaches a raw idea into a structured brief before it ever needs a SPEAKMAN.AI session |
-| Solution Architecture | `/generate-sad` | Runs the architecture workflow and renders a branded HTML + PDF document locally |
+| Solution Architecture | `/generate-sad` | Runs the architecture workflow and writes the document as Markdown, with a branded HTML version only if you ask for it |
 | Requirements Engineer | `/generate-requirements` | Runs the requirements workflow and saves implementation-ready coding contracts |
 | UX & Interface Design | `/generate-ux-design` | Runs the UX design workflow and saves the screen inventory, flow diagrams, and mockups |
 | Compliance Report | `/generate-compliance-report` | Runs a compliance workflow and produces a risk assessment report |
