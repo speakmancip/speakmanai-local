@@ -2278,13 +2278,14 @@ def _build_setup_html(cfg: dict) -> str:
     <h2>Connect your AI assistant</h2>
     <div class="radio-group" id="assistant-group">
       <label data-a="claude_code" onclick="setAssistant('claude_code')">Claude Code (CLI)</label>
-      <label data-a="claude_app" onclick="setAssistant('claude_app')">Claude app</label>
+      <label data-a="claude_app" onclick="setAssistant('claude_app')">Claude app (chat)</label>
       <label data-a="copilot" onclick="setAssistant('copilot')">Copilot Studio</label>
       <label data-a="cursor" onclick="setAssistant('cursor')">Cursor</label>
       <label data-a="codex" onclick="setAssistant('codex')">Codex</label>
     </div>
 
     <div class="panel" id="panel-claude_code">
+      <div class="exec-hint" style="margin-bottom:10px">Recommended. Covers Claude Code in a terminal and the Code tab of the Claude app. No admin rights needed.</div>
       <div class="status-line"><span class="status-dot" id="cc-dot"></span><span id="cc-status">Checking for Claude Code...</span></div>
       <div id="cc-ready" style="display:none">
         <button class="btn btn-primary" id="cc-connect" onclick="connectClient('claude_code')">Connect Claude Code</button>
@@ -2303,7 +2304,7 @@ def _build_setup_html(cfg: dict) -> str:
           <li>Press Check again.</li>
         </ol>
       </div>
-      <div class="next-box" id="cc-next" style="display:none">Next: open Claude Code in any folder and type <code>/generate-sad</code>. Restart it first if it was already open.<br>Claude Code inside the Claude app uses this same connection. Using the chat side of the Claude app? Use the Claude app tab above.</div>
+      <div class="next-box" id="cc-next" style="display:none">Next: open Claude Code in any folder and type <code>/generate-sad</code>. Restart it first if it was already open.<br>In the Claude app, quit it fully (including the tray icon) and reopen it, then use its Code tab. The chat side of the app is separate: see the Claude app (chat) tab.</div>
       <div class="exec-hint" id="skills-status"></div>
       <button class="btn btn-outline" id="skills-btn" onclick="installSkills()" style="display:none; margin-top:6px;">Install skills for Claude Code</button>
       <details class="sub" id="cc-path" style="display:none">
@@ -2322,15 +2323,11 @@ def _build_setup_html(cfg: dict) -> str:
     </div>
 
     <div class="panel" id="panel-claude_app" style="display:none">
-      <div class="exec-hint">Manual setup. The Claude app covers Claude Desktop and Cowork.</div>
-      <ol class="steps">
-        <li>In the app's settings, add a custom connector (MCP server) with this URL:
-          <div class="copy-row"><code class="mcp-url" id="mcp-url-app"></code><button class="btn btn-outline btn-copy" onclick="copyText('mcp-url-app')">Copy</button></div></li>
-        <li>Download the skills plugin and upload it in the app's settings: <span class="dl" data-name="speakmanai-sdlc.zip"></span> (all 17 skills in one upload).</li>
-        <li>Ask the app to list the SPEAKMAN.AI workflows.</li>
-      </ol>
-      <div class="exec-hint">Single skills, if you cannot upload a plugin: <span class="dl" data-name="generate-sad.zip"></span>, <span class="dl" data-name="generate-compliance-report.zip"></span>, <span class="dl" data-name="generate-speakmanai-code.zip"></span>.</div>
-      <div class="exec-hint">Experimental: with only the connector added, ask for a SPEAKMAN.AI deliverable and the app can fetch the skill from this server.</div>
+      <div class="exec-hint">For the chat side of the Claude app. To use Claude Code inside the app, use the Claude Code (CLI) tab instead: it is simpler and needs no admin rights.</div>
+      <div class="exec-hint" style="margin-top:8px">The app's Add custom connector screen cannot take this address, because Anthropic's servers make that call and they cannot reach your computer. Instead, add this server to the app's config file through a small bridge program, which needs Node installed for your user. The guide has the steps and the exact text to paste.</div>
+      <div class="exec-hint" style="margin-top:8px">This server's address:</div>
+      <div class="copy-row"><code class="mcp-url" id="mcp-url-app"></code><button class="btn btn-outline btn-copy" onclick="copyText('mcp-url-app')">Copy</button></div>
+      <div class="exec-hint" style="margin-top:8px">Full guide: <a href="https://github.com/speakmancip/speakmanai-cc/blob/master/desktop-skills/CLAUDE_APP.md" target="_blank" rel="noopener">CLAUDE_APP.md</a>. Cowork needs admin rights to install and is not covered.</div>
     </div>
 
     <div class="panel" id="panel-copilot" style="display:none">
