@@ -2531,7 +2531,8 @@ async function refreshAssistantStatus(announce) {{
   let st;
   try {{ st = await (await fetch('/api/assistant-status')).json(); }} catch (e) {{ $('cc-status').textContent = 'Could not check for Claude Code.'; return; }}
   const cc = st.claude_code;
-  $('cc-ready').style.display = cc.detected ? 'block' : 'none';
+  // Registration runs the claude command, so there is nothing to click until it exists.
+  $('cc-ready').style.display = cc.cli_found ? 'block' : 'none';
   $('cc-missing').style.display = cc.cli_found ? 'none' : 'block';
   $('cc-path').style.display = cc.windows && cc.cli_found && !cc.cli_on_path ? 'block' : 'none';
   $('cc-next').style.display = cc.registered ? 'block' : 'none';
@@ -2549,7 +2550,7 @@ async function refreshAssistantStatus(announce) {{
     btn.className = 'btn btn-primary';
   }} else if (cc.detected) {{
     $('cc-dot').className = 'status-dot warn';
-    $('cc-status').textContent = 'Claude Code CLI was not found on this computer.';
+    $('cc-status').textContent = 'Claude Code data found (probably from the Claude app), but the command-line program is not installed. Install it below, then press Check again.';
   }} else {{
     $('cc-dot').className = 'status-dot warn';
     $('cc-status').textContent = 'Claude Code CLI was not found on this computer.';
@@ -2571,11 +2572,15 @@ async function connectClient(name) {{
       body: JSON.stringify({{ client: name, port: MCP_PORT }})
     }});
     const d = await r.json();
-    // The skills are useful even when registration has to be finished by hand.
-    const s = await postInstallSkills();
-    const skillsMsg = s.bundled === false ? '' : ' ' + s.message;
-    showToast(d.message + skillsMsg, !d.ok || s.ok === false && s.bundled !== false);
-    if (!d.ok) $('cc-manual').open = true;
+    // Skills with no server behind them only confuse, so they are installed once the server is registered.
+    if (!d.ok) {{
+      showToast(d.message + ' The skills are installed when you connect.', true);
+      $('cc-manual').open = true;
+    }} else {{
+      const s = await postInstallSkills();
+      const skillsMsg = s.bundled === false ? '' : ' ' + s.message;
+      showToast(d.message + skillsMsg, s.ok === false && s.bundled !== false);
+    }}
   }} finally {{
     btn.disabled = false; btn.textContent = label;
     await refreshAssistantStatus();
