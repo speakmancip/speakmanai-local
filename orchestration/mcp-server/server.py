@@ -2327,7 +2327,8 @@ def _build_setup_html(cfg: dict) -> str:
       <div class="exec-hint" style="margin-top:8px">The app's Add custom connector screen cannot take this address, because Anthropic's servers make that call and they cannot reach your computer. Instead, add this server to the app's config file through a small bridge program, which needs Node installed for your user. The guide has the steps and the exact text to paste.</div>
       <div class="exec-hint" style="margin-top:8px">This server's address:</div>
       <div class="copy-row"><code class="mcp-url" id="mcp-url-app"></code><button class="btn btn-outline btn-copy" onclick="copyText('mcp-url-app')">Copy</button></div>
-      <div class="exec-hint" style="margin-top:8px">Full guide: <a href="https://github.com/speakmancip/speakmanai-cc/blob/master/desktop-skills/CLAUDE_APP.md" target="_blank" rel="noopener">CLAUDE_APP.md</a>. Cowork needs admin rights to install and is not covered.</div>
+      <div class="exec-hint" style="margin-top:8px">Optional: the skills plugin, to upload in the app's plugin settings (all 17 skills in one upload): <span class="dl" data-name="speakmanai-sdlc.zip"></span>. The app can also fetch skills from this server without it.</div>
+      <div class="exec-hint" style="margin-top:8px">Full guide: <a href="https://github.com/speakmancip/speakmanai-cc/blob/master/desktop-skills/CLAUDE_APP.md" target="_blank" rel="noopener">CLAUDE_APP.md</a>. Cowork uses the same steps (it needs one admin approval to install).</div>
     </div>
 
     <div class="panel" id="panel-copilot" style="display:none">
