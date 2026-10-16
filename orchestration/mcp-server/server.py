@@ -2297,7 +2297,8 @@ def _build_setup_html(cfg: dict) -> str:
         </div>
         <ol class="steps">
           <li>Paste this into PowerShell:
-            <div class="copy-row"><code id="cc-install-cmd">irm https://claude.ai/install.ps1 | iex</code><button class="btn btn-outline btn-copy" onclick="copyText('cc-install-cmd')">Copy</button></div></li>
+            <div class="copy-row"><code id="cc-install-cmd">irm https://claude.ai/install.ps1 | iex</code><button class="btn btn-outline btn-copy" onclick="copyText('cc-install-cmd')">Copy</button></div>
+            <div class="exec-hint">It prints nothing for a few minutes (about 3 to 5, depending on your connection) while it downloads. Leave the window open until it says it installed Claude Code.</div></li>
           <li>Run <code>claude</code> once and sign in when your browser opens.</li>
           <li>Press Check again.</li>
         </ol>
