@@ -2452,9 +2452,9 @@ def _build_setup_html(cfg: dict) -> str:
     <div class="exec-hint" id="fb-consent" style="display:none">By sending this you agree to receive product emails from SPEAKMAN.AI. You can unsubscribe at any time.</div>
     <button class="btn btn-outline" style="margin-top:10px" onclick="sendFeedback()">Send</button>
   </details>
-</div>
 
-<div class="exec-hint" id="app-version" style="text-align:center; margin:14px 0">SPEAKMAN.AI v{APP_VERSION}. Mention this version in any bug report.</div>
+  <div class="exec-hint" id="app-version" style="text-align:center; margin-top:18px">SPEAKMAN.AI v{APP_VERSION}. Mention this version in any bug report.</div>
+</div>
 
 <div class="toast" id="toast"></div>
 
