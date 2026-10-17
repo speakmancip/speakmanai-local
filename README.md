@@ -6,7 +6,7 @@
 
 Built-in workflows cover the whole idea-to-architecture arc — **Sizing**, **Solution Architecture**, **Requirements Engineering**, **UX Design** — plus a **Workflow Builder** for creating your own pipelines. Every workflow is a coordinated chain of AI agents that collaborate, validate each other's outputs, and (where the task calls for it) pause for a real human review before continuing.
 
-**Latest release: [v1.4.1](https://github.com/speakmancip/speakmanai-local/releases/tag/v1.4.1)**: fixes garbled punctuation in two bundled workflows and removes em dashes from all prompt text. Builds on [v1.4.0](RELEASE_NOTES.md#v140), which moved the Gemini/Vertex defaults to the 3.x line ahead of Google retiring Gemini 2.x. See [release notes](RELEASE_NOTES.md#v141).
+**Latest release: [v1.5.0](https://github.com/speakmancip/speakmanai-local/releases/tag/v1.5.0)**: one download with the skills included, and a fresh install runs through your own assistant with no API key. Adds a Remote access gate and token, a record of who did each step, and a mode guard for running sessions. See [release notes](RELEASE_NOTES.md#v150). Builds on [v1.4.1](RELEASE_NOTES.md#v141), which fixed garbled punctuation in two bundled workflows.
 
 ---
 
@@ -185,7 +185,7 @@ Switch modes at any time via the setup page or: *"Set execution mode to delegate
 | `list_sessions` | List recent sessions with a title and a `request_preview` (the start of the original request) — use to recover a lost session_id, even weeks later |
 | `cancel_session` | Cancel a stuck or failed session |
 | `update_session` | Revise one agent's output in a completed session and cascade the change through everything downstream — no re-run from scratch |
-| `set_execution_mode` | Switch between auto / force_delegate / force_background / delegate_only |
+| `set_execution_mode` | Switch between auto / force_delegate / force_background / delegate_only. A session started on one side (assistant or model API) cannot be continued after the mode moves to the other |
 | `list_skills` | List the skills the server can deliver (experimental, for assistants without installed skills) |
 | `get_skill` | Get one skill's full instructions with its bundled files inlined |
 | `import_architecture_plan` | Import a workflow JSON into the database |
@@ -235,9 +235,11 @@ python tools/bundle_skills.py           # stage the skills from a speakmanai-cc 
 python -m PyInstaller speakmanai.spec
 ```
 
+Docker and run-from-source installs use `requirements.txt`, which pins `mcp[cli]>=1.27,<2`.
+
 Output: `dist/SpeakmanAI.exe`
 
-`tools/bundle_skills.py` reads a checkout of [speakmanai-cc](https://github.com/speakmancip/speakmanai-cc) (`--cc-dir`, or `SPEAKMANAI_CC_DIR`, default a sibling folder) and stages the skills into `build/skills_bundle`. The exe then carries them: **Add to Claude Code** on the setup page installs them, and the page offers the upload bundles for other assistants. Skip the step and the exe still builds, without skills. See [SETUP.md](SETUP.md).
+`tools/bundle_skills.py` reads a checkout of [speakmanai-cc](https://github.com/speakmancip/speakmanai-cc) (`--cc-dir`, or `SPEAKMANAI_CC_DIR`, default a sibling folder) and stages the skills into `build/skills_bundle`. It first runs `tools/sync_render_html.py`, which refuses to bundle if any copy of `render_html.py` in that checkout differs from `document_renderer.py` (`--write` refreshes them; commit the result in speakmanai-cc on a branch). The exe then carries them: **Add to Claude Code** on the setup page installs them, and the page offers the upload bundles for other assistants. Skip the step and the exe still builds, without skills. See [SETUP.md](SETUP.md).
 
 ---
 

@@ -20,3 +20,14 @@ LC_ALL=C grep -l -e $'\xe2\x80' -e $'\xc3\xa2' WorkflowsAndAgents/*.json
 ```
 
 Shipped workflow files only reach **new** installs on their own. `seed_if_empty` never overwrites a workflow already in a user's database. An existing database picks up a prompt fix through the "Update workflows" button on the setup page (`workflows_sync.py`, which backs up what it replaces), or by re-importing (`import_workflow` / `import_agent`) into a local database you test against.
+
+## Releasing
+
+Follow `RELEASE_RUNBOOK.md`. Release status and test results are tracked in `speakmanai_business/rebirth/06-outstanding-tests.md`. Do not push, tag, sign or publish a release without the owner saying so.
+
+## Build rules
+
+- Skills come from a `speakmanai-cc` checkout. `tools/bundle_skills.py` fails the build if any copy of `render_html.py` there differs from `orchestration/mcp-server/document_renderer.py`. Refresh with `python tools/sync_render_html.py --write`, then a branch and PR in speakmanai-cc (never push its `master`).
+- `mcp[cli]` stays pinned to `>=1.27,<2` in both requirements files until the 2.x migration is done.
+- A new module imported by `server.py` must also go in `speakmanai.spec` (`datas` and `excludes`).
+- Tools return text only (`structured_output=False`), so each reply reaches the client once.

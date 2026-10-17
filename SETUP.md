@@ -204,7 +204,9 @@ python tools/bundle_skills.py              # stage the skills (see below)
 python -m PyInstaller speakmanai.spec
 ```
 
-Output: `dist/SpeakmanAI.exe`
+Output: `dist/SpeakmanAI.exe`. To build into a named folder: `--distpath dist\<name> --workpath build\pyi-<name>`.
+
+The agent circle icon comes from `assets/` (`speakmanai_agent_circle.png` for the tray, `speakmanai.ico` for the exe, `favicon.png` for the setup page's browser tab). `speakmanai.spec` bundles them. A new module that `server.py` imports must also be added to `speakmanai.spec` (`datas` and `excludes`), because the server is loaded by path.
 
 ### Bundled skills
 
@@ -254,7 +256,9 @@ Turn it on under **Remote access** (an Advanced fold) on the setup page. The tok
 
 Separately, the local `/api` refuses state-changing requests that a web page on another site sends through your browser (a request with an `Origin` from another site, or `Sec-Fetch-Site: cross-site`). The setup page, curl and scripts send neither and are unaffected. `/mcp` is not covered by this check, because MCP clients are not browsers.
 
-Limits to know about: the Host header is not proof of origin, so software on the same machine can claim to be local. The gate separates tunnels and proxies from local software, and a static key on a public URL narrows exposure but is not a secured cloud endpoint. Turn Remote access off and stop the tunnel when you are done. Not yet tested against a real Dev Tunnel or with Copilot Studio sending the key as a header.
+Limits to know about: the Host header is not proof of origin, so software on the same machine can claim to be local. The gate separates tunnels and proxies from local software, and a static key on a public URL narrows exposure but is not a secured cloud endpoint. Turn Remote access off and stop the tunnel when you are done. Tested with a real Dev Tunnel and with Copilot Studio sending the token as an API key header.
+
+The Docker image listens on `0.0.0.0`, so the same gate applies there: a request through the published port with a non-local Host is refused until Remote access is on.
 
 ### The run record
 
@@ -298,6 +302,8 @@ The page footer shows the app version. Mention it in a bug report.
 | **Force Delegate** | Every AI step pauses and is handed to your connected AI assistant (e.g. Claude Code) to execute instead of calling the LLM API. Useful when you have no API credits. |
 | **Force Background** | Any steps configured to delegate to an AI assistant are overridden and run automatically using the provider above — fully hands-off. |
 | **Delegate Only (API paused)** | Like Force Delegate, and the model API is paused. Nothing calls the provider, so there are no failures when you are out of credits, and your keys and provider settings are kept untouched. Switch back to Auto to resume. |
+
+A session records the mode it started in. If you change the mode to the other side (assistant to model API, or back) while a session is open, `submit_response` and `update_session` on that session refuse with a message naming the start mode, and change nothing. Switch back to continue it, or start a new session. Sessions created by earlier versions record no mode and are not guarded.
 
 ---
 
