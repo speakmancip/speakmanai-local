@@ -99,7 +99,7 @@ Since v1.2.0, `MCP_SOLUTION_ARCHITECTURE_V1` and `MCP_CAPABILITY_GENERATOR_V1` s
 
 ### Changed: no em dashes in prompt text
 
-Every agent prompt in every bundled workflow now uses plain ASCII punctuation: a spaced hyphen where an em dash was, `2-5` for ranges, `->` for arrows. The same applies to the text the server sends to models and MCP clients (the planner prompt, revision instructions, server instructions and tool descriptions). Punctuation in a prompt tends to show up in what the model writes, and em dashes are a recognizable AI-writing tell that generated documents shouldn't carry. The rule is now recorded in the repository's `CLAUDE.md`, with a check command, so later edits don't reintroduce it.
+Every agent prompt in every bundled workflow now uses plain ASCII punctuation: a spaced hyphen where an em dash was, `2-5` for ranges, `->` for arrows. The same applies to the text the server sends to models and MCP clients (the planner prompt, revision instructions, server instructions and tool descriptions). Punctuation in a prompt tends to show up in what the model writes, and em dashes are a recognizable AI-writing tell that generated documents shouldn't carry. A check for these characters is run before each release, so later edits don't reintroduce them.
 
 ### If you're upgrading
 
