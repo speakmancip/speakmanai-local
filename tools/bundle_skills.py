@@ -69,6 +69,7 @@ def main() -> int:
     ap.add_argument("--cc-dir", type=Path, default=_default_cc_dir())
     ap.add_argument("--out", type=Path, default=REPO_ROOT / "build" / "skills_bundle")
     ap.add_argument("--skip-zips", action="store_true", help="do not run desktop-skills/build.ps1 (no download bundles)")
+    ap.add_argument("--skip-render-check", action="store_true", help="bundle even if render_html.py has drifted from document_renderer.py")
     args = ap.parse_args()
 
     cc: Path = args.cc_dir.resolve()
@@ -76,6 +77,14 @@ def main() -> int:
     if not skills_src.is_dir():
         print(f"ERROR: no .claude/skills under {cc}. Pass --cc-dir or set SPEAKMANAI_CC_DIR.", file=sys.stderr)
         return 1
+
+    # The skills say render_html.py gives the same output as the render_document tool.
+    if not args.skip_render_check:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import sync_render_html
+        if sync_render_html.main(["--cc-dir", str(cc)]) != 0:
+            print("ERROR: render_html.py has drifted. Fix it, or pass --skip-render-check.", file=sys.stderr)
+            return 1
 
     out: Path = args.out.resolve()
     if out.exists():
