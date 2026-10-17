@@ -152,7 +152,7 @@ def _need_session_id(session_id: str = "", sid: str = "") -> str:
 # ─────────────────────────────────────────────
 # Tool 1: list_workflows
 # ─────────────────────────────────────────────
-@mcp.tool(name="list_workflows", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+@mcp.tool(structured_output=False, name="list_workflows", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
 async def list_workflows() -> str:
     """
     List all available SPEAKMAN.AI workflows.
@@ -175,7 +175,7 @@ async def list_workflows() -> str:
 # ─────────────────────────────────────────────
 # Tool 3: start_session
 # ─────────────────────────────────────────────
-@mcp.tool(name="start_session", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
+@mcp.tool(structured_output=False, name="start_session", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
 async def start_session(
     workflow_id: str,
     title: str,
@@ -290,7 +290,7 @@ async def _refuse_if_mode_changed(doc: dict, session_id: str) -> None:
         )
 
 
-@mcp.tool(name="submit_response", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
+@mcp.tool(structured_output=False, name="submit_response", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
 async def submit_response(
     response: str,
     session_id: str = "",
@@ -445,7 +445,7 @@ def _request_preview(events: list, limit: int = 200) -> str:
     return text if len(text) <= limit else text[:limit].rstrip() + "..."
 
 
-@mcp.tool(name="poll_workflow", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+@mcp.tool(structured_output=False, name="poll_workflow", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
 async def poll_workflow(mcp_ctx: Context, session_id: str = "", sid: str = "") -> str:
     """
     Check the status of a running workflow and retrieve outputs when complete.
@@ -865,7 +865,7 @@ def _aggregate_agent_index(events: list, human_agents: set) -> dict:
 # ─────────────────────────────────────────────
 # Tool 6: get_outputs  (manifest — no content)
 # ─────────────────────────────────────────────
-@mcp.tool(name="get_outputs", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+@mcp.tool(structured_output=False, name="get_outputs", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
 async def get_outputs(mcp_ctx: Context, session_id: str = "", sid: str = "") -> str:
     """
     Return the manifest of available agent outputs for a completed workflow session.
@@ -967,7 +967,7 @@ async def get_outputs(mcp_ctx: Context, session_id: str = "", sid: str = "") -> 
 # ─────────────────────────────────────────────
 # Tool 7: get_output  (single agent content)
 # ─────────────────────────────────────────────
-@mcp.tool(name="get_output", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+@mcp.tool(structured_output=False, name="get_output", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
 async def get_output(agent_id: str, session_id: str = "", sid: str = "") -> str:
     """
     Retrieve the full content of one agent output from a workflow session.
@@ -1020,7 +1020,7 @@ async def get_output(agent_id: str, session_id: str = "", sid: str = "") -> str:
 # ─────────────────────────────────────────────
 # Tool 8: list_sessions
 # ─────────────────────────────────────────────
-@mcp.tool(name="list_sessions", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+@mcp.tool(structured_output=False, name="list_sessions", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
 async def list_sessions(limit: int = 10) -> str:
     """
     List your recent MCP workflow sessions with their current status and session_ids.
@@ -1098,7 +1098,7 @@ async def list_sessions(limit: int = 10) -> str:
 # ─────────────────────────────────────────────
 # Tool 9: cancel_session
 # ─────────────────────────────────────────────
-@mcp.tool(name="cancel_session", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True))
+@mcp.tool(structured_output=False, name="cancel_session", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True))
 async def cancel_session(session_id: str = "", sid: str = "") -> str:
     """
     Cancel a running or stalled workflow session and free your concurrency slot.
@@ -1144,7 +1144,7 @@ async def cancel_session(session_id: str = "", sid: str = "") -> str:
 # ─────────────────────────────────────────────
 # Tool: update_session
 # ─────────────────────────────────────────────
-@mcp.tool(name="update_session", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+@mcp.tool(structured_output=False, name="update_session", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 async def update_session(agent_id: str, update_content: str, session_id: str = "", sid: str = "") -> str:
     """
     Revise one agent's output in an already-finished workflow session and cascade the change
@@ -1230,7 +1230,7 @@ async def update_session(agent_id: str, update_content: str, session_id: str = "
 # ─────────────────────────────────────────────
 # Tool 11: list_projects
 # ─────────────────────────────────────────────
-@mcp.tool(name="list_projects", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+@mcp.tool(structured_output=False, name="list_projects", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
 async def list_projects() -> str:
     """
     List your completed workflow projects from the projects cache.
@@ -1247,7 +1247,7 @@ async def list_projects() -> str:
 # ─────────────────────────────────────────────
 # Tool 12: get_project
 # ─────────────────────────────────────────────
-@mcp.tool(name="get_project", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+@mcp.tool(structured_output=False, name="get_project", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
 async def get_project(session_id: str = "", sid: str = "") -> str:
     """
     Get a specific project with its section manifest and available on-demand operations.
@@ -1273,7 +1273,7 @@ async def get_project(session_id: str = "", sid: str = "") -> str:
 # ─────────────────────────────────────────────
 # Tool 17: set_execution_mode
 # ─────────────────────────────────────────────
-@mcp.tool(name="set_execution_mode", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
+@mcp.tool(structured_output=False, name="set_execution_mode", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
 async def set_execution_mode(mode: str) -> str:
     """
     Set the global execution mode for all workflows.
@@ -1305,7 +1305,7 @@ def _strip_mongo_export_fields(doc: dict) -> None:
 # ─────────────────────────────────────────────
 # Tool 15: import_architecture_plan
 # ─────────────────────────────────────────────
-@mcp.tool(name="import_architecture_plan", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
+@mcp.tool(structured_output=False, name="import_architecture_plan", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
 async def import_architecture_plan(plan_json: str) -> str:
     """
     Import a complete workflow and its associated agents into the database.
@@ -1368,7 +1368,7 @@ async def import_architecture_plan(plan_json: str) -> str:
 # ─────────────────────────────────────────────
 # Tool 18: import_workflow
 # ─────────────────────────────────────────────
-@mcp.tool(name="import_workflow", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
+@mcp.tool(structured_output=False, name="import_workflow", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
 async def import_workflow(workflow_json: str) -> str:
     """
     Import or update a workflow definition independently (without agents).
@@ -1396,7 +1396,7 @@ async def import_workflow(workflow_json: str) -> str:
 # ─────────────────────────────────────────────
 # Tool 19: import_agent
 # ─────────────────────────────────────────────
-@mcp.tool(name="import_agent", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
+@mcp.tool(structured_output=False, name="import_agent", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
 async def import_agent(agent_json: str) -> str:
     """
     Import or update a single agent independently. Safely appends to the agent's workflow list.
@@ -1430,7 +1430,7 @@ async def import_agent(agent_json: str) -> str:
 # ─────────────────────────────────────────────
 # Tool 13: generate_document
 # ─────────────────────────────────────────────
-@mcp.tool(name="generate_document", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False))
+@mcp.tool(structured_output=False, name="generate_document", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False))
 async def generate_document(session_id: str = "", sid: str = "", format: str = "document") -> str:
     """
     Assemble workflow sections into a formatted document via AI.
@@ -1458,7 +1458,7 @@ async def generate_document(session_id: str = "", sid: str = "", format: str = "
 # ─────────────────────────────────────────────
 # Tool 14: render_document
 # ─────────────────────────────────────────────
-@mcp.tool(name="render_document", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
+@mcp.tool(structured_output=False, name="render_document", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
 async def render_document(markdown: str, title: str = "", subtitle: str = "") -> str:
     """
     Convert a Markdown document into a fully self-contained, SPEAKMAN.AI-branded HTML document
@@ -1484,7 +1484,7 @@ async def render_document(markdown: str, title: str = "", subtitle: str = "") ->
 # ─────────────────────────────────────────────
 # Tool 18: list_skills
 # ─────────────────────────────────────────────
-@mcp.tool(name="list_skills", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+@mcp.tool(structured_output=False, name="list_skills", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
 async def list_skills() -> str:
     """
     List the SPEAKMAN.AI skills this server can deliver.
@@ -1511,7 +1511,7 @@ async def list_skills() -> str:
 # ─────────────────────────────────────────────
 # Tool 19: get_skill
 # ─────────────────────────────────────────────
-@mcp.tool(name="get_skill", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+@mcp.tool(structured_output=False, name="get_skill", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
 async def get_skill(name: str) -> str:
     """
     Get the full instructions for one SPEAKMAN.AI skill, with every file it bundles included.
