@@ -20,10 +20,12 @@ def _extract_json(text: str):
             return json.loads(text[:e.pos])
         raise
 
-# Max output tokens per Anthropic model — Haiku is capped at 8192 by the API.
+# Max output tokens per Anthropic model; models not listed get the 64000 default in _call_llm.
+# The 5.5 models allow 128K output (1M context). The old 8192 cap, carried over from older Haiku
+# models, truncated every fast-tier response. Haiku is not offered: it failed as the fast tier.
 _ANTHROPIC_MAX_TOKENS: dict[str, int] = {
-    "claude-haiku-4-5-20251001": 8192,
-    "claude-haiku-4-5":          8192,
+    "claude-sonnet-5-5": 128000,
+    "claude-opus-5-5":   128000,
 }
 
 # ─────────────────────────────────────────────
@@ -60,9 +62,9 @@ OLLAMA_FALLBACK_MODEL = os.environ.get("OLLAMA_FALLBACK_MODEL", "llama3")
 MODEL_TIERS = {
     "gemini":    {"fast": "gemini-3.5-flash-lite", "standard": "gemini-3.8-flash", "advanced": "gemini-3.1-pro-preview"},
     "vertexai":  {"fast": "gemini-3.5-flash-lite", "standard": "gemini-3.8-flash", "advanced": "gemini-3.1-pro-preview"},
-    "anthropic": {"fast": "claude-haiku-4-5-20251001", "standard": "claude-sonnet-4-6", "advanced": "claude-opus-4-8"},
-    "openai":    {"fast": "gpt-4o-mini",       "standard": "gpt-4o",           "advanced": "gpt-4o"},
-    "ollama":    {"fast": None,                 "standard": None,               "advanced": None},
+    "anthropic": {"fast": "claude-sonnet-5-5", "standard": "claude-sonnet-5-5", "advanced": "claude-opus-5-5"},
+    "openai":    {"fast": "gpt-6-luna",       "standard": "gpt-6.1-sol",       "advanced": "gpt-6-astra"},
+    "ollama":    {"fast": None,                "standard": None,               "advanced": None},
 }
 
 # Reverse map: known model name → tier (used for cross-provider conflict resolution)
@@ -70,9 +72,10 @@ _MODEL_TO_TIER = {
     "gemini-3.1-pro-preview": "advanced", "gemini-3.8-flash": "standard",
     "gemini-3-flash-preview": "standard",
     "gemini-3.5-flash-lite": "fast", "gemini-3.1-flash-lite": "fast",
+    "claude-opus-5-5": "advanced",  "claude-sonnet-5-5": "standard",
     "claude-opus-4-8": "advanced",  "claude-sonnet-4-6": "standard",
-    "claude-haiku-4-5-20251001": "fast", "claude-haiku-4-5": "fast",
     "claude-sonnet-5": "standard",  "claude-fable-5": "advanced",
+    "gpt-6-astra": "advanced",      "gpt-6.1-sol": "standard",  "gpt-6-luna": "fast",
     "gpt-4o": "standard",           "gpt-4o-mini": "fast",
     "o1": "advanced",               "o3-mini": "fast",
 }
@@ -298,6 +301,41 @@ async def _call_llm(system_prompt: str, user_content: str, model_name: str, mime
 
     return result_text
 
+# Execution modes that hand every AI step to the connected tool. "delegate_only" additionally
+# pauses the model API: saved keys and provider settings are kept but never used.
+_DELEGATING_MODES = ("force_delegate", "delegate_only")
+
+
+def mode_family(mode: str) -> str:
+    """Who runs the AI steps: "assistant" (the delegating modes) or "engine" (the model API).
+    A session is planned for one of them when it starts and cannot move to the other."""
+    return "assistant" if mode in _DELEGATING_MODES else "engine"
+
+
+async def _get_exec_mode(db) -> str:
+    settings = await db["settings"].find_one({"_id": "global_config"}) or {}
+    return settings.get("execution_mode", "auto")
+
+
+def _model_configured(model_name: str, exec_mode: str = "auto") -> bool:
+    """True if the engine has what it needs to attempt a model call for model_name.
+
+    Checks configuration only, never reachability: a configured provider that is down should
+    still fail visibly. Ollama counts as configured because it needs no credentials.
+    In delegate_only mode the model API is paused, so nothing counts as configured."""
+    if exec_mode == "delegate_only":
+        return False
+    cfg = _cfg()
+    provider, _ = _resolve_model(model_name)
+    if provider == "anthropic":
+        return bool(cfg["anthropic_key"])
+    if provider == "openai":
+        return bool(cfg["openai_key"])
+    if provider == "ollama":
+        return True
+    return bool(cfg["gemini_key"] or cfg["gcp_project"])
+
+
 async def _log_event_to_db(session_id: str, event: dict, db):
     """
     Appends events to the session and promotes top-level fields (status, title, owner)
@@ -508,7 +546,14 @@ async def transition_completed_or_cancelled_to_draft(session_id: str, db) -> boo
     return getattr(result, "matched_count", 0) > 0
 
 
-async def _emit_advance_event(session_id: str, db, queue: asyncio.Queue, workflow_def: dict, current_step_idx: int, agent_id: str, content: str, cascade: dict = None, hitl_cap_reached: bool = False):
+def _carry_provenance(source_outputs: dict) -> dict:
+    """The who-did-it record kept on a step's output: executed_by (who produced it), validated_by
+    (the validator that checked it, or why it was skipped) and gate_answered_by (who answered a
+    human review gate). Copied from an earlier output event so a later event for the same output keeps it."""
+    return {k: source_outputs[k] for k in ("executed_by", "validated_by", "gate_answered_by") if source_outputs.get(k)}
+
+
+async def _emit_advance_event(session_id: str, db, queue: asyncio.Queue, workflow_def: dict, current_step_idx: int, agent_id: str, content: str, cascade: dict = None, hitl_cap_reached: bool = False, prov: dict = None):
     """Advances the workflow past current_step_idx using `content` as the accepted output of
     agent_id, or marks the session COMPLETED if this was the final step. Shared by the plain
     AI-step path, the delegate-resume path, and the AI_VALIDATOR/HITL_VALIDATOR PASS paths —
@@ -537,7 +582,7 @@ async def _emit_advance_event(session_id: str, db, queue: asyncio.Queue, workflo
     }
     if hitl_cap_reached:
         attrs["hitl_cap_reached"] = "true"
-    exec_ctx = {"source_outputs": {"source_agent_id": agent_id, "content": content}}
+    exec_ctx = {"source_outputs": {"source_agent_id": agent_id, "content": content, **(prov or {})}}
 
     if cascade and not is_final:
         attrs["update_loop"] = str(cascade.get("loop", 0))
@@ -577,7 +622,7 @@ async def _emit_advance_event(session_id: str, db, queue: asyncio.Queue, workflo
         await queue.put({"action": "process_step", "session_id": session_id})
 
 
-async def _maybe_gate_by_hitl(session_id: str, db, queue: asyncio.Queue, workflow_def: dict, current_step_idx: int, agent_id: str, content: str, hitl_loop: int = 0, cascade: dict = None):
+async def _maybe_gate_by_hitl(session_id: str, db, queue: asyncio.Queue, workflow_def: dict, current_step_idx: int, agent_id: str, content: str, hitl_loop: int = 0, cascade: dict = None, prov: dict = None):
     """Checks whether agent_id declares a humanFeedbackId. If so, pauses the workflow for
     human review instead of advancing (current_step_index stays pinned to agent_id's step,
     exactly like an AI_VALIDATOR retry does). Otherwise advances normally via _emit_advance_event.
@@ -587,7 +632,7 @@ async def _maybe_gate_by_hitl(session_id: str, db, queue: asyncio.Queue, workflo
     hitl_agent_id = agent_config.get("humanFeedbackId") if agent_config else None
 
     if not hitl_agent_id:
-        await _emit_advance_event(session_id, db, queue, workflow_def, current_step_idx, agent_id, content, cascade=cascade)
+        await _emit_advance_event(session_id, db, queue, workflow_def, current_step_idx, agent_id, content, cascade=cascade, prov=prov)
         return
 
     max_loops = int((agent_config or {}).get("humanFeedbackConfig", {}).get("maxLoops", 3))
@@ -597,7 +642,7 @@ async def _maybe_gate_by_hitl(session_id: str, db, queue: asyncio.Queue, workflo
         # for a review round that would never resolve. hitl_cap_reached is a discoverable marker
         # in the event log for anyone auditing why this agent didn't get a final human sign-off.
         log.warning(f"[{session_id}] Agent {agent_id}: HITL loop budget ({max_loops}) exhausted. Advancing with the latest regenerated content instead of pausing again.")
-        await _emit_advance_event(session_id, db, queue, workflow_def, current_step_idx, agent_id, content, cascade=cascade, hitl_cap_reached=True)
+        await _emit_advance_event(session_id, db, queue, workflow_def, current_step_idx, agent_id, content, cascade=cascade, hitl_cap_reached=True, prov=prov)
         return
 
     log.info(f"[{session_id}] Agent {agent_id} requires human review by {hitl_agent_id}. Pausing (loop {hitl_loop})...")
@@ -619,7 +664,7 @@ async def _maybe_gate_by_hitl(session_id: str, db, queue: asyncio.Queue, workflo
         "attributes": pause_attrs,
         "data": {
             "workflow_definition": workflow_def,
-            "execution_context": {"source_outputs": {"source_agent_id": agent_id, "content": content}}
+            "execution_context": {"source_outputs": {"source_agent_id": agent_id, "content": content, **(prov or {})}}
         }
     }
     await _log_event_to_db(session_id, pause_event, db)
@@ -660,7 +705,14 @@ async def _handle_hitl_response(event: dict, queue: asyncio.Queue):
         feedback = raw_response
 
     if status == "Approved":
-        await _emit_advance_event(session_id, db, queue, workflow_def, current_step_idx, origin_agent_id, origin_content, cascade=cascade)
+        # The engine cannot tell a person's answer from the assistant answering for them: both
+        # arrive through submit_response. So the gate is recorded as answered through the client.
+        prov = _carry_provenance(latest_event["data"]["execution_context"]["source_outputs"])
+        answered = dict(event.get("executed_by") or {"kind": "client_reported"})
+        answered["answered_through"] = "the connected client"
+        answered["mode"] = await _get_exec_mode(db)
+        prov["gate_answered_by"] = answered
+        await _emit_advance_event(session_id, db, queue, workflow_def, current_step_idx, origin_agent_id, origin_content, cascade=cascade, prov=prov)
         return
 
     # "Update" — retry the origin agent with the human's feedback injected, even on what may be
@@ -818,7 +870,7 @@ async def _handle_start(event: dict, queue: asyncio.Queue):
     
     for a in workflow_agents:
         current_type = a.get("agentType", "AI_WORKFLOW")
-        if exec_mode == "force_delegate" and current_type.startswith("AI_"):
+        if exec_mode in _DELEGATING_MODES and current_type.startswith("AI_"):
             a["agentType"] = "MCP_LLM_DELEGATE"
         elif exec_mode == "force_background" and current_type == "MCP_LLM_DELEGATE":
             a["agentType"] = "AI_WORKFLOW"
@@ -841,7 +893,7 @@ async def _handle_start(event: dict, queue: asyncio.Queue):
         
         user_content = f"Workflow Configuration:\n{workflow_doc.get('description', '')}\n\nAVAILABLE_AGENTS:\n{agent_list_for_prompt}\n\nUSER_PROMPT:\n{prompt}\nworkflow_id={workflow_id}"
         
-        is_planner_delegated = exec_mode == "force_delegate" or (exec_mode == "auto" and planner_exec_mode == "delegate")
+        is_planner_delegated = exec_mode in _DELEGATING_MODES or (exec_mode == "auto" and planner_exec_mode == "delegate")
         
         if is_planner_delegated:
             log.info(f"[{session_id}] Delegating planner to CLI.")
@@ -920,6 +972,7 @@ async def _handle_start(event: dict, queue: asyncio.Queue):
             "workflow_id": workflow_id,
             "owner_id": "local_user",
             "session_title": title,
+            "execution_mode": exec_mode,
             "current_step_index": "0",
             "status": initial_status,
             "event_type": "MCP_PAUSE" if is_planner_delegated or first_step_type == "MCP_PAUSE" else "WORKFLOW"
@@ -928,13 +981,21 @@ async def _handle_start(event: dict, queue: asyncio.Queue):
             "workflow_definition": workflow_def,
             "execution_context": {
                 "session_id": session_id,
+                # The planner's output, as far as every other agent is concerned, is the user's
+                # request and nothing else - the same whether the planner ran on the model API
+                # or was delegated.
                 "source_outputs": {
                     "source_agent_id": planner_agent_id,
-                    "content": user_content if is_planner_delegated and workflow_type != "system" else prompt
+                    "content": prompt
                 }
             }
         }
     }
+    if is_planner_delegated and workflow_type != "system":
+        # A delegated planner needs the workflow description and agent list to build the plan.
+        # Kept apart from source_outputs so it reaches the planner's own pause only, and is not
+        # repeated to every later agent that depends on the planner.
+        initial_event["data"]["execution_context"]["planner_input"] = user_content
 
     # Log event via our integrated logger
     await _log_event_to_db(session_id, initial_event, db)
@@ -1006,7 +1067,7 @@ async def _handle_resume(event: dict, queue: asyncio.Queue):
                         a_type = a_doc.get("agentType", "")
                         a_exec_mode = a_doc.get("executionMode", "auto")
 
-                        if exec_mode == "force_delegate" and a_type.startswith("AI_"): a_type = "MCP_LLM_DELEGATE"
+                        if exec_mode in _DELEGATING_MODES and a_type.startswith("AI_"): a_type = "MCP_LLM_DELEGATE"
                         elif exec_mode == "auto" and a_exec_mode == "delegate" and a_type.startswith("AI_"): a_type = "MCP_LLM_DELEGATE"
                         elif a_doc.get("model") == "delegate" and a_type.startswith("AI_"): a_type = "MCP_LLM_DELEGATE"
 
@@ -1056,7 +1117,8 @@ async def _handle_resume(event: dict, queue: asyncio.Queue):
                 "execution_context": {
                     "source_outputs": {
                         "source_agent_id": agent_id,
-                        "content": content
+                        "content": content,
+                        "executed_by": {**(event.get("executed_by") or {"kind": "client_reported"}), "mode": exec_mode},
                     }
                 }
             }
@@ -1078,6 +1140,12 @@ async def _handle_resume(event: dict, queue: asyncio.Queue):
     hitl_loop = int(latest_event.get("attributes", {}).get("hitl_loop", "0"))
     cascade = _extract_cascade(latest_event)
 
+    # Who produced this output: the connected client. What it says about itself came with
+    # submit_response and is not checked; the execution mode is the engine's own record.
+    who = dict(event.get("executed_by") or {"kind": "client_reported"})
+    who["mode"] = await _get_exec_mode(db)
+    prov = {"executed_by": who}
+
     # --- Validation Check (delegated/paused steps) ---
     # Mirrors the check in _handle_process_step: a delegate agent's output
     # never passes through that function, so it must be validated here instead.
@@ -1097,12 +1165,13 @@ async def _handle_resume(event: dict, queue: asyncio.Queue):
             "validation_loop": validation_loop,
             "hitl_loop": hitl_loop,
             "cascade": cascade,
-            "source_outputs": {"source_agent_id": agent_id, "content": content}
+            "source_outputs": {"source_agent_id": agent_id, "content": content},
+            "prov": prov,
         })
         return
 
     log.info(f"[{session_id}] Resumed by local user.")
-    await _maybe_gate_by_hitl(session_id, db, queue, workflow_def, current_step_index, agent_id, content, hitl_loop, cascade=cascade)
+    await _maybe_gate_by_hitl(session_id, db, queue, workflow_def, current_step_index, agent_id, content, hitl_loop, cascade=cascade, prov=prov)
 
 
 async def _handle_process_step(event: dict, queue: asyncio.Queue):
@@ -1233,6 +1302,10 @@ async def _handle_process_step(event: dict, queue: asyncio.Queue):
         await db["events_raw"].update_one({"session_id": session_id}, {"$set": {"current_status": "FAILED", "error_message": str(e)}})
         return
 
+    # Who produced this output: the engine itself, on the configured model.
+    prov = {"executed_by": {"kind": "engine_model", "provider": LLM_PROVIDER, "model": model_name,
+                            "mode": await _get_exec_mode(db)}}
+
     # --- Validation Check ---
     validator_agent_id = agent_config.get("validatorAgentId")
     if validator_agent_id:
@@ -1248,12 +1321,13 @@ async def _handle_process_step(event: dict, queue: asyncio.Queue):
             "validation_loop": validation_loop,
             "hitl_loop": hitl_loop,
             "cascade": cascade,
-            "source_outputs": latest_event["data"]["execution_context"]["source_outputs"]
+            "source_outputs": latest_event["data"]["execution_context"]["source_outputs"],
+            "prov": prov,
         })
         return
 
     # No validator configured (or it already passed) — check the HITL gate before advancing.
-    await _maybe_gate_by_hitl(session_id, db, queue, workflow_def, current_step_idx, agent_id, llm_output, hitl_loop, cascade=cascade)
+    await _maybe_gate_by_hitl(session_id, db, queue, workflow_def, current_step_idx, agent_id, llm_output, hitl_loop, cascade=cascade, prov=prov)
 
 
 async def _handle_validate_step(event: dict, queue: asyncio.Queue):
@@ -1268,6 +1342,8 @@ async def _handle_validate_step(event: dict, queue: asyncio.Queue):
     hitl_loop = event.get("hitl_loop", 0)
     cascade = event.get("cascade")
     original_source_outputs = event["source_outputs"]
+    prov = dict(event.get("prov") or {})
+    validated_by = {"agent": validator_agent_id, "skipped": "validator not found"}
 
     db = get_db(os.environ.get("RAW_EVENTS_DB_NAME", "speakmanai_db"))
     session_doc = await db["events_raw"].find_one({"session_id": session_id})
@@ -1277,6 +1353,25 @@ async def _handle_validate_step(event: dict, queue: asyncio.Queue):
     if not validator_config:
         log.warning(f"[{session_id}] Validator {validator_agent_id} not found. Auto-passing.")
         score, feedback, max_loops, min_score, val_output = 10, "Validator not found.", 0, 0.0, "Validator not found."
+    elif not _model_configured(validator_config.get("model", DEFAULT_MODEL), exec_mode := await _get_exec_mode(db)):
+        # No model API is configured (or it is paused by delegate_only), so the validator
+        # cannot run. It is deliberately not delegated to the connected tool: that would ask
+        # the delegate to validate its own output. Pass the step through and leave a VALIDATION
+        # marker so the run record shows it was not validated. (VALIDATION events are filtered
+        # out of every output scan.)
+        skip_reason = "model API paused (delegate_only mode)" if exec_mode == "delegate_only" else "no model API configured"
+        log.warning(f"[{session_id}] {skip_reason}. Skipping validator {validator_agent_id} for {agent_id} (auto-pass).")
+        score, feedback, max_loops, min_score, val_output = 10, f"Validation skipped: {skip_reason}.", 0, 0.0, "Validation skipped."
+        validated_by = {"agent": validator_agent_id, "skipped": skip_reason}
+        await _log_event_to_db(session_id, {
+            "event_id": str(uuid.uuid4()),
+            "publish_time": datetime.now(timezone.utc).isoformat(),
+            "attributes": {
+                "session_id": session_id, "owner_id": "local_user", "event_type": "VALIDATION",
+                "validation_skipped": "true", "agent_id": agent_id, "validator_agent_id": validator_agent_id,
+            },
+            "data": {"reason": skip_reason},
+        }, db)
     else:
         val_config = validator_config.get("validationConfig", {})
         max_loops = int(val_config.get("maxLoops", 3))
@@ -1288,6 +1383,8 @@ async def _handle_validate_step(event: dict, queue: asyncio.Queue):
             validator_user_content += f"\n\n{dep_context}"
 
         log.info(f"[{session_id}] Running validation loop {validation_loop+1}/{max_loops} with {validator_agent_id}...")
+        validated_by = {"agent": validator_agent_id, "kind": "engine_model", "provider": LLM_PROVIDER,
+                        "model": validator_config.get("model", DEFAULT_MODEL)}
         try:
             val_output = await _call_llm(
                 system_prompt=validator_config.get("systemPrompt", ""),
@@ -1328,7 +1425,10 @@ async def _handle_validate_step(event: dict, queue: asyncio.Queue):
 
         # PASS! Check the HITL gate before advancing to the next workflow step —
         # this is what makes "AI validator first, then HITL" work when both are configured.
-        await _maybe_gate_by_hitl(session_id, db, queue, workflow_def, current_step_idx, agent_id, content_to_validate, hitl_loop, cascade=cascade)
+        if "skipped" not in validated_by:
+            validated_by["score"] = score
+        prov["validated_by"] = validated_by
+        await _maybe_gate_by_hitl(session_id, db, queue, workflow_def, current_step_idx, agent_id, content_to_validate, hitl_loop, cascade=cascade, prov=prov)
 
     else:
         # FAIL! Retry the exact same step with the feedback injected.
@@ -1404,7 +1504,9 @@ async def generate_document_local(session_id: str, format_hint: str) -> str:
     project = await db["projects"].find_one({"session_id": session_id})
     if not project or not project.get("outputs", {}).get("sections"):
         raise ValueError(f"Cannot generate document: Project {session_id} not found or has no completed sections.")
-    
+    if await _get_exec_mode(db) == "delegate_only":
+        raise ValueError("generate_document needs the model API, which is paused (execution mode delegate_only). Assemble the document yourself from get_output, or switch the mode with set_execution_mode.")
+
     full_context = "\n\n".join([f"## {s['title']}\n{s['content']}" for s in project["outputs"]["sections"]])
     system_prompt = f"You are an expert technical writer. Assemble the provided sections into a highly professional {format_hint}. Output in clean Markdown format."
     

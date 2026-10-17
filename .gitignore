@@ -46,3 +46,11 @@ desktop.ini
 marketing/
 *.dsl
 workspace.json
+
+# Local test config (Windows Sandbox for the clean-machine install test)
+*.wsb
+
+RELEASE_RUNBOOK.md
+V1_5_0_PLAN.md
+CLAUDE.md
+LITE_ENHANCEMENTS.md

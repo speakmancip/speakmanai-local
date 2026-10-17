@@ -8,6 +8,8 @@ import os
 import re
 import sys
 import json
+import shutil
+import subprocess
 import logging
 import uuid
 import httpx
@@ -25,11 +27,13 @@ if not getattr(sys, "_MEIPASS", None):
     load_dotenv()
 
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from mcp.server.fastmcp import FastMCP, Context
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
+import skills_installer
+import workflows_sync
 from database import get_db, get_user_db, close as close_db
 from engine import (
     process_local_event,
@@ -39,6 +43,7 @@ from engine import (
     render_document_local,
     resolve_agent_step_index,
     transition_completed_or_cancelled_to_draft,
+    mode_family,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -117,14 +122,37 @@ mcp = FastMCP(
         "get_outputs returns the manifest only; get_output returns one agent's full content.\n\n"
         "get_outputs works on any past session_id - use it to resume downstream work across conversations.\n\n"
         "If a session is stuck or failed, call cancel_session(session_id) to free your concurrency slot.\n\n"
-        "If you lose a session_id (context reset, new conversation), call list_sessions() to recover it."
+        "If you lose a session_id (context reset, new conversation), call list_sessions() to recover it.\n\n"
+        "SKILLS: this server can also deliver skills, which are complete step-by-step instructions for "
+        "producing a finished deliverable from a workflow (for example a Solution Architecture Document, "
+        "a compliance report, requirements, a UX design, generated code). When the user asks for a "
+        "deliverable like that and your client does not already have a SPEAKMAN.AI skill installed for it, "
+        "call list_skills(), then get_skill(name), and follow the returned instructions exactly instead of "
+        "improvising the steps. If your client already has the skill installed (for example Claude Code "
+        "with /generate-sad), use the installed skill."
     )
 )
 
 # ─────────────────────────────────────────────
+# Session id handling
+# ─────────────────────────────────────────────
+def _need_session_id(session_id: str = "", sid: str = "") -> str:
+    """Accept the session id under either name. Some clients drop an argument named session_id
+    before the call reaches this server, so every tool that takes one also accepts sid."""
+    value = (session_id or sid or "").strip()
+    if not value:
+        log.warning("Tool call arrived with no session id under either session_id or sid.")
+        raise ValueError(
+            "No session id received. Pass the session id as session_id. If your client drops "
+            "arguments named session_id, pass the same value as sid instead."
+        )
+    return value
+
+
+# ─────────────────────────────────────────────
 # Tool 1: list_workflows
 # ─────────────────────────────────────────────
-@mcp.tool(name="list_workflows", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+@mcp.tool(structured_output=False, name="list_workflows", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
 async def list_workflows() -> str:
     """
     List all available SPEAKMAN.AI workflows.
@@ -147,7 +175,7 @@ async def list_workflows() -> str:
 # ─────────────────────────────────────────────
 # Tool 3: start_session
 # ─────────────────────────────────────────────
-@mcp.tool(name="start_session", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
+@mcp.tool(structured_output=False, name="start_session", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
 async def start_session(
     workflow_id: str,
     title: str,
@@ -213,14 +241,63 @@ async def start_session(
     }, indent=2)
 
 
+def _caller_descriptor(mcp_ctx, self_reported: str) -> dict:
+    """What the run record keeps about whoever called submit_response. The name is what the client
+    says; the user agent and the connection (local, or which remote token) come from the request."""
+    import hashlib
+    who = {"kind": "client_reported"}
+    name = (self_reported or "").strip()
+    if name:
+        who["name"] = name[:120]
+    try:
+        scope = mcp_ctx.request_context.request.scope
+        headers = dict(scope.get("headers") or [])
+        ua = headers.get(b"user-agent", b"").decode("latin-1").strip()
+        if ua:
+            who["user_agent"] = ua[:120]
+        local = _host_of(headers) in _LOCAL_HOSTS and not any(h in headers for h in _FORWARDED_HEADERS)
+        if local:
+            who["connection"] = "local"
+        else:
+            _, token = _remote_settings()
+            who["connection"] = ("remote, token " + hashlib.sha256(token.encode()).hexdigest()[:8]) if _token_ok(headers, token) else "remote"
+    except Exception:
+        pass
+    return who
+
+
 # ─────────────────────────────────────────────
 # Tool 3: submit_response  (generic HITL resume)
 # ─────────────────────────────────────────────
-@mcp.tool(name="submit_response", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
+async def _refuse_if_mode_changed(doc: dict, session_id: str) -> None:
+    """A session is planned for the assistant or for the model API when it starts: its steps are
+    fixed as delegated pauses or as engine steps, and its checks run the same way. Continuing it
+    after the execution mode moved to the other side sends the same delegated item again and
+    runs the validators against the wrong side. Refuse before anything changes. A session from
+    before the mode was recorded has nothing to compare and is left alone."""
+    events = doc.get("events") or []
+    started = ((events[0].get("attributes") or {}).get("execution_mode") if events else None)
+    if not started:
+        return
+    now = await _get_execution_mode()
+    if mode_family(started) != mode_family(now):
+        raise RuntimeError(
+            f"Session {session_id} was started in execution mode {started}, but the mode is now {now}. "
+            "A session cannot move between your assistant running the AI steps and the model API running them, "
+            "because the steps it already planned would run the wrong way. Nothing was changed. "
+            f"Switch the mode back (set_execution_mode(\"{started}\") or the setup page) to continue this session, "
+            "or start a new session in the current mode."
+        )
+
+
+@mcp.tool(structured_output=False, name="submit_response", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
 async def submit_response(
-    session_id: str,
     response: str,
+    session_id: str = "",
+    sid: str = "",
     pause_id: str = "",
+    executed_by: str = "",
+    mcp_ctx: Context = None,
 ) -> str:
     """
     Submit your response to a workflow that is waiting for input (status=AWAITING_INPUT).
@@ -236,12 +313,17 @@ async def submit_response(
 
     Args:
         session_id: The session_id from start_session
+        sid:        Same as session_id. Use it only if your client drops arguments named session_id.
         response:   Your response as a string (JSON-encoded array/object for structured inputs)
         pause_id:   input_required.pause_id from the poll_workflow call you're answering.
                     Optional, but always pass it: it guarantees your response is applied to the
                     pause you actually read, and is rejected if the workflow has since moved on
                     (e.g. a repeated submit would otherwise land on the NEXT pause).
+        executed_by: Optional. Who is answering, for the run record: your assistant name and model,
+                    for example "Claude Code, claude-sonnet-5-5". It is stored as reported by you.
     """
+    session_id = _need_session_id(session_id, sid)
+    caller = _caller_descriptor(mcp_ctx, executed_by)
     if not response or not response.strip():
         raise ValueError("response must be a non-empty string.")
     if len(response) > 50000:
@@ -253,6 +335,8 @@ async def submit_response(
     doc = await db[COLLECTION].find_one({"session_id": session_id})
     if not doc:
         raise RuntimeError(f"Session {session_id} not found.")
+
+    await _refuse_if_mode_changed(doc, session_id)
 
     mcp_input_config = await _get_mcp_pause_config(doc)
     if not mcp_input_config:
@@ -320,6 +404,7 @@ async def submit_response(
             "hitl_agent_id": agent_id,
             "origin_agent_id": mcp_input_config.get("origin_agent_id", ""),
             "user_id": "local_user",
+            "executed_by": caller,
         })
     else:
         # Push resume event to internal local queue
@@ -329,7 +414,8 @@ async def submit_response(
             "content": response,
             "current_step_index": step_index,
             "agentId": agent_id,
-            "user_id": "local_user"
+            "user_id": "local_user",
+            "executed_by": caller,
         })
 
     return json.dumps({
@@ -346,18 +432,34 @@ async def submit_response(
 # ─────────────────────────────────────────────
 # Tool 5: poll_workflow
 # ─────────────────────────────────────────────
-@mcp.tool(name="poll_workflow", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
-async def poll_workflow(session_id: str, mcp_ctx: Context) -> str:
+def _request_preview(events: list, limit: int = 200) -> str:
+    """The start of the request the session was started with, so a session can be recognised
+    weeks later. It is stored as the planner's output on the first event."""
+    try:
+        text = events[0]["data"]["execution_context"]["source_outputs"]["content"]
+    except (IndexError, KeyError, TypeError):
+        return ""
+    if not isinstance(text, str):
+        return ""
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit].rstrip() + "..."
+
+
+@mcp.tool(structured_output=False, name="poll_workflow", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+async def poll_workflow(mcp_ctx: Context, session_id: str = "", sid: str = "") -> str:
     """
     Check the status of a running workflow and retrieve outputs when complete.
 
     Args:
         session_id: The session_id returned by start_session
+        sid:        Same as session_id. Use it only if your client drops arguments named session_id.
 
     Returns:
+        title and request_preview (what the session was started with),
         status (IN_PROGRESS | AWAITING_CAPABILITIES | COMPLETED | FAILED),
         completed_steps list, and outputs dict keyed by agent_id when COMPLETED.
     """
+    session_id = _need_session_id(session_id, sid)
     db = get_db(os.environ.get("RAW_EVENTS_DB_NAME", "speakmanai_db"))
     COLLECTION = os.environ.get("RAW_EVENTS_COLLECTION", "events_raw")
 
@@ -416,6 +518,8 @@ async def poll_workflow(session_id: str, mcp_ctx: Context) -> str:
 
     result = {
         "session_id": session_id,
+        "title": doc.get("session_title", ""),
+        "request_preview": _request_preview(events),
         "status": current_status,
         "completed_steps": completed_steps,
     }
@@ -432,13 +536,16 @@ async def poll_workflow(session_id: str, mcp_ctx: Context) -> str:
         }
         if mcp_input_config.get("origin_agent_id"):
             result["input_required"]["origin_agent_id"] = mcp_input_config["origin_agent_id"]
+        if mcp_input_config.get("context_refs"):
+            result["input_required"]["context_refs"] = mcp_input_config["context_refs"]
 
         if agent_type == "MCP_LLM_DELEGATE":
             result["message"] = (
                 "The workflow has paused and is delegating this execution step to YOU (the connected AI assistant). "
                 "Do NOT ask the user for this information. Read input_required.prompt, input_required.context, "
                 "and input_required.schema. Execute the task yourself using your own capabilities, "
-                "then immediately call submit_response(session_id, response, pause_id=input_required.pause_id) with the result."
+                "then immediately call submit_response(session_id, response, pause_id=input_required.pause_id) with the result. "
+                "If input_required.context_refs is present, the context lists large earlier outputs by agent_id instead of repeating them: use your own copy only if you hold the complete text, otherwise call get_output for each."
             )
         elif agent_type == "HITL_VALIDATOR":
             result["message"] = (
@@ -470,8 +577,17 @@ async def poll_workflow(session_id: str, mcp_ctx: Context) -> str:
 
 
 
-def _compile_dependencies_context(agent_doc: dict, events: list) -> str:
-    """Compiles a unified context block based on the agent's specific dependencies."""
+# A delegated pause normally carries the full text of every output the step depends on. Past this
+# size the pause lists the large outputs by agent_id instead, and the client uses what it already
+# holds or fetches them with get_output. Keeps one pause under client result limits (73K characters
+# hit one in the Claude app) and stops the same output being re-sent in every later pause.
+PAUSE_INLINE_LIMIT = int(os.environ.get("SPEAKMANAI_PAUSE_INLINE_LIMIT", "20000"))
+PAUSE_INLINE_SMALL = 2000  # outputs under this many characters stay inline even in reference mode
+
+
+def _dependency_blocks(agent_doc: dict, events: list) -> tuple[list, str]:
+    """The (agent_id, content) pairs an agent depends on, last write wins. With no declared
+    dependencies there are no pairs and the second value is the session's first output."""
     dependencies = agent_doc.get("dependencies", []) if agent_doc else []
     latest_outputs = {}
     first_output = ""
@@ -488,21 +604,44 @@ def _compile_dependencies_context(agent_doc: dict, events: list) -> str:
                 first_output = content
 
     if not dependencies:
-        return first_output
-        
-    compiled_parts = []
-    get_all = "*" in dependencies
-    if get_all:
-        for agent, content in latest_outputs.items():
-            if not agent.startswith("root_planner"):
-                compiled_parts.append(f"# CONTEXT FROM {agent}:\n{content}")
-    else:
-        for dep in dependencies:
-            if dep in latest_outputs:
-                compiled_parts.append(f"# CONTEXT FROM {dep}:\n{latest_outputs[dep]}")
-                
-    return "\n\n".join(compiled_parts) if compiled_parts else ""
+        return [], first_output
 
+    if "*" in dependencies:
+        return [(a, c) for a, c in latest_outputs.items() if not a.startswith("root_planner")], ""
+    return [(d, latest_outputs[d]) for d in dependencies if d in latest_outputs], ""
+
+
+async def _compile_pause_context(agent_doc: dict, events: list, session_id: str) -> tuple[str, list]:
+    """Context for a pause: the dependency outputs inline when they are small, otherwise the
+    large ones listed by agent_id. Returns (context text, context_refs)."""
+    blocks, plain = _dependency_blocks(agent_doc, events)
+    if plain or not blocks:
+        return plain, []
+    inline = "\n\n".join(f"# CONTEXT FROM {a}:\n{c}" for a, c in blocks)
+    if len(inline) <= PAUSE_INLINE_LIMIT:
+        return inline, []
+
+    # get_output serves an agent's output only for agents in the aggregate index, so only those can be referenced.
+    fetchable = set(_aggregate_agent_index(events, await _build_human_exclusion_set(events)))
+    parts, refs = [], []
+    for agent, content in blocks:
+        if agent in fetchable and len(content) > PAUSE_INLINE_SMALL:
+            refs.append({"agent_id": agent, "chars": len(content)})
+        else:
+            parts.append(f"# CONTEXT FROM {agent}:\n{content}")
+    if not refs:
+        return inline, []
+
+    listing = "\n".join(f"- {r['agent_id']}: {r['chars']} characters" for r in refs)
+    note = (
+        "# CONTEXT NOT INCLUDED\n"
+        "This step also depends on the outputs below. They are large, so they are not repeated here:\n"
+        f"{listing}\n"
+        "For each one: if its complete text is still in this conversation, exactly as it was written, use that. "
+        f"Otherwise call get_output(agent_id, session_id='{session_id}') and read the returned content. "
+        "Do not work from memory, a summary or a partial copy of an output."
+    )
+    return "\n\n".join([note] + parts), refs
 
 def _latest_pause_event(events: list) -> dict | None:
     """The most recent MCP_PAUSE event - the pause a session in AWAITING_INPUT is waiting on.
@@ -546,7 +685,7 @@ async def _get_mcp_pause_config(doc: dict) -> dict | None:
         origin_agent_id = origin_source.get("source_agent_id", "")
         origin_content = origin_source.get("content", "")
 
-        dep_context = _compile_dependencies_context(hitl_agent_doc, events)
+        dep_context, context_refs = await _compile_pause_context(hitl_agent_doc, events, doc.get("session_id", ""))
         hitl_context = f"# OUTPUT UNDER REVIEW ({origin_agent_id})\n{origin_content}"
         if dep_context:
             hitl_context += f"\n\n{dep_context}"
@@ -569,6 +708,7 @@ async def _get_mcp_pause_config(doc: dict) -> dict | None:
             "prompt": hitl_agent_doc.get("systemPrompt", "") if hitl_agent_doc else "",
             "schema": hitl_agent_doc.get("inputSchema", {}) if hitl_agent_doc else {},
             "context": hitl_context,
+            "context_refs": context_refs,
             "step_index": mcp_pause_step_index,
             "pause_id": mcp_pause_event.get("event_id", ""),
             "agent_id": hitl_agent_id,
@@ -600,18 +740,23 @@ async def _get_mcp_pause_config(doc: dict) -> dict | None:
     exec_mode = settings.get("execution_mode", "auto")
     a_exec_mode = agent_doc.get("executionMode", "auto") if agent_doc else "auto"
 
-    if exec_mode == "force_delegate" and agent_type.startswith("AI_"):
+    if exec_mode in ("force_delegate", "delegate_only") and agent_type.startswith("AI_"):
         agent_type = "MCP_LLM_DELEGATE"
     elif exec_mode == "force_background" and agent_type == "MCP_LLM_DELEGATE":
         agent_type = "AI_WORKFLOW"
     elif exec_mode == "auto" and a_exec_mode == "delegate" and agent_type.startswith("AI_"):
         agent_type = "MCP_LLM_DELEGATE"
 
-    context = _compile_dependencies_context(agent_doc, events)
+    pause_exec_ctx = mcp_pause_event.get("data", {}).get("execution_context", {}) if mcp_pause_event else {}
+    # A delegated planner's pause carries its own input (workflow description, agent list and
+    # the user's request). Every other pause gets its declared dependencies.
+    context_refs = []
+    context = pause_exec_ctx.get("planner_input")
+    if not context:
+        context, context_refs = await _compile_pause_context(agent_doc, events, doc.get("session_id", ""))
 
     # If this pause is a re-prompt after a failed validation or a human "Update" decision,
     # surface the prior attempt and the reviewer's feedback so the delegate can revise its answer.
-    pause_exec_ctx = mcp_pause_event.get("data", {}).get("execution_context", {}) if mcp_pause_event else {}
     validation_feedback = pause_exec_ctx.get("validation_feedback")
     hitl_feedback = pause_exec_ctx.get("hitl_feedback")
     update_feedback = pause_exec_ctx.get("update_feedback")
@@ -646,6 +791,7 @@ async def _get_mcp_pause_config(doc: dict) -> dict | None:
         "prompt": agent_doc.get("systemPrompt", "") if agent_doc else "",
         "schema": schema,
         "context": context,
+        "context_refs": context_refs,
         "step_index": mcp_pause_step_index,
         "pause_id": mcp_pause_event.get("event_id", ""),
         "agent_id": agent_id,
@@ -710,6 +856,7 @@ def _aggregate_agent_index(events: list, human_agents: set) -> dict:
                         "content": src.get("content", ""),
                         "mime_type": src.get("mime_type", "text/plain"),
                         "index": step_index,
+                        **{k: src[k] for k in ("executed_by", "validated_by", "gate_answered_by") if src.get(k)},
                     }
             step_index += 1
     return agent_index
@@ -718,8 +865,8 @@ def _aggregate_agent_index(events: list, human_agents: set) -> dict:
 # ─────────────────────────────────────────────
 # Tool 6: get_outputs  (manifest — no content)
 # ─────────────────────────────────────────────
-@mcp.tool(name="get_outputs", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
-async def get_outputs(session_id: str, mcp_ctx: Context) -> str:
+@mcp.tool(structured_output=False, name="get_outputs", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+async def get_outputs(mcp_ctx: Context, session_id: str = "", sid: str = "") -> str:
     """
     Return the manifest of available agent outputs for a completed workflow session.
     Does NOT return content - call get_output(session_id, agent_id) for each output you need.
@@ -728,12 +875,14 @@ async def get_outputs(session_id: str, mcp_ctx: Context) -> str:
 
     Args:
         session_id: The session_id from start_session or poll_workflow
+        sid:        Same as session_id. Use it only if your client drops arguments named session_id.
 
     Returns:
         Session metadata, list of available outputs (agent_id, description, mime_type, index),
         document_capabilities, and suggested next steps.
         Use get_output(session_id, agent_id) to fetch the full content of each output.
     """
+    session_id = _need_session_id(session_id, sid)
     db = get_db(os.environ.get("RAW_EVENTS_DB_NAME", "speakmanai_db"))
     COLLECTION = os.environ.get("RAW_EVENTS_COLLECTION", "events_raw")
 
@@ -760,6 +909,7 @@ async def get_outputs(session_id: str, mcp_ctx: Context) -> str:
             "description": f"Output from {agent_id}",
             "mime_type": meta["mime_type"],
             "index": meta["index"],
+            **{k: meta[k] for k in ("executed_by", "validated_by", "gate_answered_by") if k in meta},
         }
         for agent_id, meta in sorted(agent_index.items(), key=lambda x: x[1]["index"])
     ]
@@ -780,9 +930,18 @@ async def get_outputs(session_id: str, mcp_ctx: Context) -> str:
     return json.dumps({
         "session_id": session_id,
         "title": title,
+        "request_preview": _request_preview(events),
         "workflow_id": workflow_id,
         "status": current_status,
         "agent_count": len(available_outputs),
+        "run_record_note": (
+            "executed_by says who produced each output: kind engine_model means the engine ran the step on the "
+            "named model; kind client_reported means a connected client did, and its name is what it reported "
+            "about itself. validated_by shows the validator that checked the output, or why it was skipped. "
+            "gate_answered_by shows who answered a human review gate; the engine cannot tell a person from "
+            "the assistant answering for them. Report these as recorded and do not describe a run as "
+            "independently reviewed unless they show it."
+        ),
         "available_outputs": available_outputs,
         "document_capabilities": document_capabilities,
         "suggested_next_steps": (
@@ -808,20 +967,22 @@ async def get_outputs(session_id: str, mcp_ctx: Context) -> str:
 # ─────────────────────────────────────────────
 # Tool 7: get_output  (single agent content)
 # ─────────────────────────────────────────────
-@mcp.tool(name="get_output", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
-async def get_output(session_id: str, agent_id: str) -> str:
+@mcp.tool(structured_output=False, name="get_output", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+async def get_output(agent_id: str, session_id: str = "", sid: str = "") -> str:
     """
     Retrieve the full content of one agent output from a workflow session.
     Call get_outputs(session_id) first to get the list of available agent_ids.
 
     Args:
         session_id: The session_id from start_session or poll_workflow
+        sid:        Same as session_id. Use it only if your client drops arguments named session_id.
         agent_id:   The agent_id from get_outputs available_outputs list
                     (e.g. 'MCP_TECHNICAL_WRITER_V2', 'MCP_COMPLIANCE_OFFICER_V2')
 
     Returns:
         agent_id, description, mime_type, and the full content string for that agent.
     """
+    session_id = _need_session_id(session_id, sid)
     db = get_db(os.environ.get("RAW_EVENTS_DB_NAME", "speakmanai_db"))
     COLLECTION = os.environ.get("RAW_EVENTS_COLLECTION", "events_raw")
 
@@ -859,7 +1020,7 @@ async def get_output(session_id: str, agent_id: str) -> str:
 # ─────────────────────────────────────────────
 # Tool 8: list_sessions
 # ─────────────────────────────────────────────
-@mcp.tool(name="list_sessions", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+@mcp.tool(structured_output=False, name="list_sessions", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
 async def list_sessions(limit: int = 10) -> str:
     """
     List your recent MCP workflow sessions with their current status and session_ids.
@@ -874,6 +1035,8 @@ async def list_sessions(limit: int = 10) -> str:
         List of sessions ordered by most recent first, each with:
           session_id - pass to poll_workflow, get_outputs, get_output, cancel_session
           title - the title supplied to start_session
+          request_preview - the first 200 characters of the request the session was started with,
+                           to recognise which project a session was about
           workflow_id - identifies the workflow type and therefore the correct call chain
           status - one of:
                            COMPLETED          → call get_outputs then get_output to retrieve content
@@ -921,6 +1084,7 @@ async def list_sessions(limit: int = 10) -> str:
         sessions.append({
             "session_id": doc["session_id"],
             "title": doc.get("session_title", ""),
+            "request_preview": _request_preview(events),
             "workflow_id": workflow_id_val,
             "status": status,
             "awaiting_input": status in ("AWAITING_INPUT", "AWAITING_CAPABILITIES"),
@@ -934,8 +1098,8 @@ async def list_sessions(limit: int = 10) -> str:
 # ─────────────────────────────────────────────
 # Tool 9: cancel_session
 # ─────────────────────────────────────────────
-@mcp.tool(name="cancel_session", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True))
-async def cancel_session(session_id: str) -> str:
+@mcp.tool(structured_output=False, name="cancel_session", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True))
+async def cancel_session(session_id: str = "", sid: str = "") -> str:
     """
     Cancel a running or stalled workflow session and free your concurrency slot.
 
@@ -944,10 +1108,12 @@ async def cancel_session(session_id: str) -> str:
 
     Args:
         session_id: The session_id to cancel
+        sid:        Same as session_id. Use it only if your client drops arguments named session_id.
 
     Returns:
         Confirmation that the session was marked CANCELLED and the concurrency slot freed.
     """
+    session_id = _need_session_id(session_id, sid)
     db = get_db(os.environ.get("RAW_EVENTS_DB_NAME", "speakmanai_db"))
     COLLECTION = os.environ.get("RAW_EVENTS_COLLECTION", "events_raw")
 
@@ -978,8 +1144,8 @@ async def cancel_session(session_id: str) -> str:
 # ─────────────────────────────────────────────
 # Tool: update_session
 # ─────────────────────────────────────────────
-@mcp.tool(name="update_session", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
-async def update_session(session_id: str, agent_id: str, update_content: str) -> str:
+@mcp.tool(structured_output=False, name="update_session", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+async def update_session(agent_id: str, update_content: str, session_id: str = "", sid: str = "") -> str:
     """
     Revise one agent's output in an already-finished workflow session and cascade the change
     through every downstream agent that depends on it.
@@ -989,12 +1155,14 @@ async def update_session(session_id: str, agent_id: str, update_content: str) ->
 
     Args:
         session_id: The session_id of a COMPLETED or CANCELLED session (from list_sessions).
+        sid:        Same as session_id. Use it only if your client drops arguments named session_id.
         agent_id:   The agent whose output to revise - an agent_id from get_outputs' available_outputs.
         update_content: What should change, in your own words.
 
     Returns:
         Confirmation the cascade has started - poll_workflow(session_id) exactly like a fresh run.
     """
+    session_id = _need_session_id(session_id, sid)
     if not agent_id or not agent_id.strip():
         raise ValueError("agent_id must be a non-empty string.")
     if not update_content or not update_content.strip():
@@ -1012,6 +1180,7 @@ async def update_session(session_id: str, agent_id: str, update_content: str) ->
     events = doc.get("events") or []
     if not events:
         raise RuntimeError(f"Session {session_id} has no recorded steps to update.")
+    await _refuse_if_mode_changed(doc, session_id)
     workflow_def = events[0].get("data", {}).get("workflow_definition", {})
 
     entry_step_idx = resolve_agent_step_index(workflow_def, agent_id)
@@ -1061,7 +1230,7 @@ async def update_session(session_id: str, agent_id: str, update_content: str) ->
 # ─────────────────────────────────────────────
 # Tool 11: list_projects
 # ─────────────────────────────────────────────
-@mcp.tool(name="list_projects", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+@mcp.tool(structured_output=False, name="list_projects", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
 async def list_projects() -> str:
     """
     List your completed workflow projects from the projects cache.
@@ -1078,8 +1247,8 @@ async def list_projects() -> str:
 # ─────────────────────────────────────────────
 # Tool 12: get_project
 # ─────────────────────────────────────────────
-@mcp.tool(name="get_project", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
-async def get_project(session_id: str) -> str:
+@mcp.tool(structured_output=False, name="get_project", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+async def get_project(session_id: str = "", sid: str = "") -> str:
     """
     Get a specific project with its section manifest and available on-demand operations.
 
@@ -1092,7 +1261,9 @@ async def get_project(session_id: str) -> str:
 
     Args:
         session_id: The session_id from list_projects or start_session
+        sid:        Same as session_id. Use it only if your client drops arguments named session_id.
     """
+    session_id = _need_session_id(session_id, sid)
     try:
         return await get_project_local(session_id)
     except ValueError as e:
@@ -1102,17 +1273,17 @@ async def get_project(session_id: str) -> str:
 # ─────────────────────────────────────────────
 # Tool 17: set_execution_mode
 # ─────────────────────────────────────────────
-@mcp.tool(name="set_execution_mode", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
+@mcp.tool(structured_output=False, name="set_execution_mode", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
 async def set_execution_mode(mode: str) -> str:
     """
     Set the global execution mode for all workflows.
     Allows you to override the agent configurations dynamically.
     
     Args:
-        mode: One of "auto" (default JSON config), "force_delegate" (Claude Code executes all AI steps), or "force_background" (Ollama/Vertex executes all delegated steps).
+        mode: One of "auto" (default JSON config), "force_delegate" (Claude Code executes all AI steps), "force_background" (Ollama/Vertex executes all delegated steps), or "delegate_only" (like force_delegate, and the model API is paused: saved keys and settings are kept but never used, and AI validators auto-pass).
     """
-    if mode not in ("auto", "force_delegate", "force_background"):
-        raise ValueError('mode must be "auto", "force_delegate", or "force_background"')
+    if mode not in ("auto", "force_delegate", "force_background", "delegate_only"):
+        raise ValueError('mode must be "auto", "force_delegate", "force_background", or "delegate_only"')
         
     db = get_db()
     await db["settings"].update_one(
@@ -1134,7 +1305,7 @@ def _strip_mongo_export_fields(doc: dict) -> None:
 # ─────────────────────────────────────────────
 # Tool 15: import_architecture_plan
 # ─────────────────────────────────────────────
-@mcp.tool(name="import_architecture_plan", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
+@mcp.tool(structured_output=False, name="import_architecture_plan", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
 async def import_architecture_plan(plan_json: str) -> str:
     """
     Import a complete workflow and its associated agents into the database.
@@ -1197,7 +1368,7 @@ async def import_architecture_plan(plan_json: str) -> str:
 # ─────────────────────────────────────────────
 # Tool 18: import_workflow
 # ─────────────────────────────────────────────
-@mcp.tool(name="import_workflow", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
+@mcp.tool(structured_output=False, name="import_workflow", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
 async def import_workflow(workflow_json: str) -> str:
     """
     Import or update a workflow definition independently (without agents).
@@ -1225,7 +1396,7 @@ async def import_workflow(workflow_json: str) -> str:
 # ─────────────────────────────────────────────
 # Tool 19: import_agent
 # ─────────────────────────────────────────────
-@mcp.tool(name="import_agent", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
+@mcp.tool(structured_output=False, name="import_agent", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
 async def import_agent(agent_json: str) -> str:
     """
     Import or update a single agent independently. Safely appends to the agent's workflow list.
@@ -1259,8 +1430,8 @@ async def import_agent(agent_json: str) -> str:
 # ─────────────────────────────────────────────
 # Tool 13: generate_document
 # ─────────────────────────────────────────────
-@mcp.tool(name="generate_document", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False))
-async def generate_document(session_id: str, format: str = "document") -> str:
+@mcp.tool(structured_output=False, name="generate_document", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False))
+async def generate_document(session_id: str = "", sid: str = "", format: str = "document") -> str:
     """
     Assemble workflow sections into a formatted document via AI.
     The result is cached in the project record - subsequent calls regenerate it.
@@ -1270,12 +1441,14 @@ async def generate_document(session_id: str, format: str = "document") -> str:
 
     Args:
         session_id: The session_id of the completed project
+        sid:        Same as session_id. Use it only if your client drops arguments named session_id.
         format:     Document format hint for the assembler, e.g. "document",
                     "executive_summary", "sad", "report" (default: "document")
 
     Returns:
         The assembled document as a Markdown string, plus session_id and format.
     """
+    session_id = _need_session_id(session_id, sid)
     try:
         return await generate_document_local(session_id, format)
     except Exception as e:
@@ -1285,7 +1458,7 @@ async def generate_document(session_id: str, format: str = "document") -> str:
 # ─────────────────────────────────────────────
 # Tool 14: render_document
 # ─────────────────────────────────────────────
-@mcp.tool(name="render_document", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
+@mcp.tool(structured_output=False, name="render_document", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
 async def render_document(markdown: str, title: str = "", subtitle: str = "") -> str:
     """
     Convert a Markdown document into a fully self-contained, SPEAKMAN.AI-branded HTML document
@@ -1306,6 +1479,58 @@ async def render_document(markdown: str, title: str = "", subtitle: str = "") ->
         return await render_document_local(markdown, title or None, subtitle or None)
     except Exception as e:
         raise RuntimeError(f"render_document failed: {str(e)}")
+
+
+# ─────────────────────────────────────────────
+# Tool 18: list_skills
+# ─────────────────────────────────────────────
+@mcp.tool(structured_output=False, name="list_skills", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+async def list_skills() -> str:
+    """
+    List the SPEAKMAN.AI skills this server can deliver.
+
+    A skill is a complete set of step-by-step instructions for producing a finished deliverable,
+    for example running the architecture workflow and writing a Solution Architecture Document.
+    Call this when the user asks for a SPEAKMAN.AI deliverable and your client does not already
+    have a matching skill installed. Then call get_skill(name) for the one you need.
+
+    Returns:
+        JSON: skills_version and a list of {name, description}.
+    """
+    skills = await asyncio.to_thread(skills_installer.list_mcp_skills)
+    manifest = skills_installer.load_manifest() or {}
+    if not skills:
+        return json.dumps({"skills": [], "message": "This build of the server does not include any skills."})
+    return json.dumps({
+        "skills_version": manifest.get("version"),
+        "skills": skills,
+        "next_step": "Call get_skill(name) and follow the returned instructions exactly.",
+    }, indent=2)
+
+
+# ─────────────────────────────────────────────
+# Tool 19: get_skill
+# ─────────────────────────────────────────────
+@mcp.tool(structured_output=False, name="get_skill", annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+async def get_skill(name: str) -> str:
+    """
+    Get the full instructions for one SPEAKMAN.AI skill, with every file it bundles included.
+
+    Follow the returned instructions exactly, as you would a skill installed in your client.
+    Files the skill refers to (for example prompts/sad_agent_prompt.md) are included in the
+    same response under BUNDLED FILES, so nothing needs to be read from disk.
+
+    Args:
+        name: A skill name from list_skills (for example 'generate-sad').
+
+    Returns:
+        The skill instructions as plain text.
+    """
+    text = await asyncio.to_thread(skills_installer.get_mcp_skill, name)
+    if text is None:
+        available = [s["name"] for s in await asyncio.to_thread(skills_installer.list_mcp_skills)]
+        raise ValueError(f"Unknown skill '{name}'. Available skills: {', '.join(available) or 'none in this build'}.")
+    return text
 
 
 # ─────────────────────────────────────────────
@@ -1379,6 +1604,18 @@ async def lifespan(app: FastAPI):
     # Seed database on first launch if empty
     if os.environ.get("USE_SQLITE", "").lower() in ("true", "1", "yes"):
         await seed_if_empty()
+        try:
+            st = await workflows_sync.status(get_db(), _workflows_and_agents_dir())
+            if st["state"] == "differs":
+                names = ", ".join(d["workflowId"] for d in st["differs"])
+                log.warning(f"{len(st['differs'])} shipped workflow(s) differ from this version: {names}. "
+                            "Open the setup page to update them.")
+        except Exception as e:
+            log.warning(f"Could not check the workflows against this version: {e}")
+    try:
+        await _apply_fresh_install_mode()
+    except Exception as e:
+        log.warning(f"Could not set the fresh-install execution mode: {e}")
 
     # Start the integrated local worker queue
     asyncio.create_task(local_workflow_consumer())
@@ -1480,16 +1717,38 @@ _CONFIG_PATH = Path.home() / ".speakmanai" / "config.json"
 
 _PROVIDER_MODELS = {
     "gemini":    {"fast": "gemini-3.5-flash-lite", "standard": "gemini-3.8-flash",  "advanced": "gemini-3.1-pro-preview"},
-    "anthropic": {"fast": "claude-haiku-4-5-20251001", "standard": "claude-sonnet-4-6", "advanced": "claude-opus-4-8"},
-    "openai":    {"fast": "gpt-4o-mini",           "standard": "gpt-4o",            "advanced": "gpt-4o"},
-    "ollama":    {"fast": "",                       "standard": "",                  "advanced": ""},
+    "anthropic": {"fast": "claude-sonnet-5-5", "standard": "claude-sonnet-5-5", "advanced": "claude-opus-5-5"},
+    "openai":    {"fast": "gpt-6-luna",       "standard": "gpt-6.1-sol",       "advanced": "gpt-6-astra"},
+    "ollama":    {"fast": "",                      "standard": "",                  "advanced": ""},
 }
 
-_MCP_CLIENT_PATHS = {
-    "claude_desktop": Path(os.environ.get("APPDATA", "")) / "Claude" / "claude_desktop_config.json",
-    "claude_code":    Path.home() / ".claude" / "settings.json",
-    "cursor":         Path.home() / ".cursor" / "mcp.json",
-}
+_MCP_SERVER_NAME = "speakmanai"
+
+
+def _find_claude_cli() -> str | None:
+    """Locate the Claude Code CLI. The exe may be started with a shorter PATH than the user's
+    shell, so also check the native installer's default location."""
+    found = shutil.which("claude")
+    if found:
+        return found
+    for candidate in (Path.home() / ".local" / "bin" / "claude.exe", Path.home() / ".local" / "bin" / "claude"):
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _claude_mcp_add_args(url: str) -> list[str]:
+    # User scope: one registration covers every project. Claude Code keeps MCP servers in
+    # ~/.claude.json and owns that file, so register through its CLI rather than editing JSON.
+    return ["mcp", "add", "--transport", "http", "--scope", "user", _MCP_SERVER_NAME, url]
+
+
+def _run_claude(cli: str, args: list[str]) -> tuple[int, str]:
+    proc = subprocess.run(
+        [cli, *args], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return proc.returncode, ((proc.stdout or "") + (proc.stderr or "")).strip()
 
 
 def _read_config() -> dict:
@@ -1504,6 +1763,105 @@ def _read_config() -> dict:
 def _write_config(cfg: dict) -> None:
     _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     _CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+
+# ── Remote access gate ───────────────────────
+# The engine listens on localhost. A tunnel (Dev Tunnels, ngrok) makes it reachable from the
+# internet, and nothing else here authenticates a caller. So: by default a request that does not
+# say it is for localhost is refused. With "Remote access" switched on, the MCP endpoint accepts
+# a request that carries the token. The setup page and /api never accept a non-local request.
+
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
+_FORWARDED_HEADERS = (b"x-forwarded-for", b"x-forwarded-host", b"forwarded")
+
+
+def _host_of(headers: dict) -> str:
+    host = headers.get(b"host", b"").decode("latin-1").strip().lower()
+    if host.startswith("["):
+        return host.split("]")[0] + "]"
+    return host.rsplit(":", 1)[0] if ":" in host else host
+
+
+def _remote_settings() -> tuple[bool, str]:
+    cfg = _read_config()
+    return bool(cfg.get("remote_access")), str(cfg.get("remote_token") or "")
+
+
+def _token_ok(headers: dict, token: str) -> bool:
+    import hmac
+    if not token:
+        return False
+    given = headers.get(b"x-api-key", b"").decode("latin-1").strip()
+    auth = headers.get(b"authorization", b"").decode("latin-1").strip()
+    if not given and auth.lower().startswith("bearer "):
+        given = auth[7:].strip()
+    return bool(given) and hmac.compare_digest(given.encode(), token.encode())
+
+
+def _cross_site_write(scope, headers: dict) -> bool:
+    """True for a state-changing request to /api that a web page on another site sent through the
+    user's browser. Such a page can post text/plain JSON to localhost with no preflight, and the
+    handlers read the body as JSON whatever its type. A browser always sends Origin (or Sec-Fetch-Site)
+    on those posts; curl, scripts and the MCP clients send neither, so they are not affected."""
+    if scope.get("method", "GET") not in ("POST", "PUT", "PATCH", "DELETE"):
+        return False
+    if not scope.get("path", "").startswith("/api/"):
+        return False
+    if headers.get(b"sec-fetch-site", b"").decode("latin-1").strip().lower() == "cross-site":
+        return True
+    origin = headers.get(b"origin")
+    if origin is None:
+        return False
+    from urllib.parse import urlsplit
+    try:
+        host = urlsplit(origin.decode("latin-1").strip()).hostname or ""
+    except ValueError:
+        return True
+    return host not in ("localhost", "127.0.0.1", "::1")
+
+
+class RemoteAccessGate:
+    """Pure ASGI middleware (no buffering, so MCP streaming is untouched)."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        headers = dict(scope.get("headers") or [])
+        # A proxy that rewrites Host to localhost usually still adds a forwarding header.
+        local = _host_of(headers) in _LOCAL_HOSTS and not any(h in headers for h in _FORWARDED_HEADERS)
+        if local:
+            if _cross_site_write(scope, headers):
+                return await self._refuse(send, 403, "Refused: this request came from another website. Use the SpeakmanAI setup page itself.")
+            return await self.app(scope, receive, send)
+        enabled, token = _remote_settings()
+        path = scope.get("path", "")
+        if not enabled:
+            return await self._refuse(send, 403, "Remote access is off. Turn it on in the SpeakmanAI setup page on the computer that runs it.")
+        if not (path == "/mcp" or path.startswith("/mcp/")):
+            return await self._refuse(send, 403, "The setup page and its API are only available on the computer that runs SpeakmanAI.")
+        if not _token_ok(headers, token):
+            # Names only, never values, so a refused client can be diagnosed from the log.
+            auth = headers.get(b"authorization", b"").decode("latin-1").strip()
+            log.info("Remote request refused (no valid token): %s %s; x-api-key %s; authorization %s; header names: %s",
+                     scope.get("method", ""), path,
+                     "present" if headers.get(b"x-api-key") else "absent",
+                     ("Bearer" if auth.lower().startswith("bearer ") else "present, not Bearer") if auth else "absent",
+                     ", ".join(sorted(k.decode("latin-1") for k in headers)))
+            return await self._refuse(send, 401, "A valid access token is required.")
+        return await self.app(scope, receive, send)
+
+    @staticmethod
+    async def _refuse(send, status: int, message: str):
+        body = json.dumps({"error": message}).encode()
+        await send({"type": "http.response.start", "status": status,
+                    "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
+
+
+app.add_middleware(RemoteAccessGate)
 
 
 def _apply_config_to_env(cfg: dict) -> None:
@@ -1530,10 +1888,77 @@ def _apply_config_to_env(cfg: dict) -> None:
             os.environ.pop(env_key, None)
 
 
+_EXECUTION_MODES = ("auto", "force_delegate", "force_background", "delegate_only")
+
+
+async def _get_execution_mode() -> str:
+    """The engine's effective execution mode: the global_config row in the settings collection."""
+    settings = await get_db()["settings"].find_one({"_id": "global_config"}) or {}
+    mode = settings.get("execution_mode", "auto")
+    return mode if mode in _EXECUTION_MODES else "auto"
+
+
+def _model_api_configured() -> bool:
+    """True if a model API is set up at all: any provider key, a GCP project, or Ollama chosen."""
+    env = os.environ
+    if env.get("LLM_PROVIDER", "").lower() == "ollama":
+        return True
+    return any(env.get(k) for k in ("GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GCP_PROJECT_ID"))
+
+
+async def _set_execution_mode(mode: str) -> None:
+    await get_db()["settings"].update_one(
+        {"_id": "global_config"}, {"$set": {"execution_mode": mode}}, upsert=True
+    )
+
+
+async def _apply_fresh_install_mode() -> None:
+    """A new install with no model API starts in delegate_only, so workflows run through the
+    connected assistant without a key. An install that has ever chosen a mode is left alone."""
+    row = await get_db()["settings"].find_one({"_id": "global_config"}) or {}
+    if "execution_mode" not in row and not _model_api_configured():
+        await _set_execution_mode("delegate_only")
+        log.info("No model API configured and no execution mode chosen: defaulting to delegate_only.")
+
+
+def _claude_code_status(expected_url: str) -> dict:
+    """What the setup page needs to know about Claude Code on this machine. Read-only."""
+    home = Path.home()
+    cli = _find_claude_cli()
+    registered_url = None
+    try:
+        data = json.loads((home / ".claude.json").read_text(encoding="utf-8"))
+        registered_url = ((data.get("mcpServers") or {}).get(_MCP_SERVER_NAME) or {}).get("url")
+    except Exception:
+        pass
+    return {
+        "cli_found": bool(cli),
+        # The native installer puts claude.exe in ~/.local/bin and does not always add it to PATH.
+        "cli_on_path": bool(shutil.which("claude")),
+        "windows": os.name == "nt",
+        "detected": bool(cli) or (home / ".claude").is_dir(),
+        "registered": registered_url == expected_url,
+        "registered_url": registered_url,
+    }
+
+
+@app.get("/api/assistant-status")
+async def assistant_status(request: Request):
+    port = request.url.port or 8000
+    return JSONResponse({
+        "claude_code": await asyncio.to_thread(_claude_code_status, f"http://localhost:{port}/mcp"),
+        "model_api_configured": _model_api_configured(),
+        "execution_mode": await _get_execution_mode(),
+    })
+
+
 @app.get("/setup", response_class=HTMLResponse)
 async def setup_page():
     """Self-contained onboarding page — no external JS/CSS dependencies."""
     cfg = _read_config()
+    # The engine reads the execution mode from the database (also written by the
+    # set_execution_mode tool), so show that value rather than whatever config.json holds.
+    cfg["execution_mode"] = await _get_execution_mode()
     return HTMLResponse(
         _build_setup_html(cfg),
         headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
@@ -1543,6 +1968,7 @@ async def setup_page():
 @app.get("/api/config")
 async def get_config():
     cfg = _read_config()
+    cfg.pop("remote_token", None)
     # Mask API keys
     for key in ("gemini_api_key", "anthropic_api_key", "openai_api_key"):
         if cfg.get(key):
@@ -1550,14 +1976,63 @@ async def get_config():
     return JSONResponse(cfg)
 
 
+@app.get("/api/remote-access")
+async def get_remote_access():
+    """Is remote access on, and what is the token? Only reachable from this computer (see RemoteAccessGate)."""
+    enabled, token = _remote_settings()
+    return JSONResponse({"enabled": enabled, "token": token})
+
+
+@app.post("/api/remote-access")
+async def set_remote_access(request: Request):
+    """Turn remote access on or off. The token is made the first time it is turned on; regenerate replaces it."""
+    import secrets
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "message": "That request was not valid."})
+    cfg = _read_config()
+    if "enabled" in body:
+        cfg["remote_access"] = bool(body["enabled"])
+    if body.get("regenerate") or (cfg.get("remote_access") and not cfg.get("remote_token")):
+        cfg["remote_token"] = secrets.token_urlsafe(32)
+    _write_config(cfg)
+    log.info(f"Remote access {'on' if cfg.get('remote_access') else 'off'}" + (" (token regenerated)" if body.get("regenerate") else ""))
+    return JSONResponse({"ok": True, "enabled": bool(cfg.get("remote_access")), "token": str(cfg.get("remote_token") or "")})
+
+
 @app.post("/api/config")
 async def post_config(request: Request):
     body = await request.json()
+    # "use_model_api" is the setup page asking to run AI steps on the user's own model API.
+    # It is a request, not a setting: the mode only becomes auto when an API is really set up.
+    use_model_api = bool(body.pop("use_model_api", False))
+    # Remote access has its own endpoint; this one never changes it.
+    body.pop("remote_access", None)
+    body.pop("remote_token", None)
+    mode = body.get("execution_mode")
+    if mode is not None and mode not in _EXECUTION_MODES:
+        return JSONResponse({"ok": False, "message": f"Invalid execution_mode: {mode!r}."}, status_code=400)
     cfg = _read_config()
     cfg.update({k: v for k, v in body.items() if v is not None})
     _write_config(cfg)
     _apply_config_to_env(cfg)
-    return JSONResponse({"ok": True, "message": "Configuration saved."})
+    configured = _model_api_configured()
+    message = "Configuration saved."
+    if use_model_api:
+        if configured:
+            mode = "auto"
+            message = "Saved. AI steps now run on your model API."
+        else:
+            mode = None
+            message = "Saved. Add a model API to switch: until then your assistant keeps running the AI steps."
+    if mode is not None:
+        # The engine reads the mode from the database, not from config.json or the environment.
+        cfg["execution_mode"] = mode
+        _write_config(cfg)
+        await _set_execution_mode(mode)
+    return JSONResponse({"ok": True, "message": message, "execution_mode": await _get_execution_mode(),
+                         "model_api_configured": configured})
 
 
 @app.get("/api/check-ollama")
@@ -1583,54 +2058,180 @@ async def check_ollama():
 @app.post("/api/setup-mcp-client")
 async def setup_mcp_client(request: Request):
     body = await request.json()
-    client_name = body.get("client")  # "claude_desktop" | "claude_code" | "cursor"
-    port = body.get("port", 8000)
-
-    config_path = _MCP_CLIENT_PATHS.get(client_name)
-    if not config_path:
+    client_name = body.get("client")
+    # Only Claude Code can be registered automatically. Other clients are set up by hand
+    # from the MCP URL shown on the setup page.
+    if client_name != "claude_code":
         raise HTTPException(status_code=400, detail=f"Unknown client: {client_name}")
 
-    if not config_path.parent.exists():
-        return JSONResponse({"ok": False, "message": f"{client_name} not detected (directory missing)."})
+    # Connecting an assistant with no model API set up means the assistant does the work.
+    if not _model_api_configured() and await _get_execution_mode() == "auto":
+        await _set_execution_mode("delegate_only")
 
-    entry = {"url": f"http://localhost:{port}/mcp"}
+    port = body.get("port") or request.url.port or 8000
+    url = f"http://localhost:{port}/mcp"
+    add_args = _claude_mcp_add_args(url)
+    command = "claude " + " ".join(add_args)
+
+    cli = _find_claude_cli()
+    if not cli:
+        return JSONResponse({"ok": False, "command": command,
+                             "message": "Claude Code CLI not found. Copy the command and run it in a terminal."})
 
     try:
-        existing: dict = {}
-        if config_path.exists():
-            try:
-                existing = json.loads(config_path.read_text(encoding="utf-8"))
-            except Exception:
-                existing = {}
-
-        mcp_servers = existing.get("mcpServers", {})
-        mcp_servers["speakmanai"] = entry
-        existing["mcpServers"] = mcp_servers
-
-        config_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
-        return JSONResponse({"ok": True, "message": f"Added to {client_name}. Restart the client to activate."})
+        code, out = await asyncio.to_thread(_run_claude, cli, add_args)
+        if code != 0 and "already exists" in out.lower():
+            # Re-register so a changed port takes effect.
+            await asyncio.to_thread(_run_claude, cli, ["mcp", "remove", "--scope", "user", _MCP_SERVER_NAME])
+            code, out = await asyncio.to_thread(_run_claude, cli, add_args)
+        if code != 0:
+            log.warning(f"claude mcp add failed ({code}): {out}")
+            return JSONResponse({"ok": False, "command": command,
+                                 "message": f"Claude Code did not accept the registration: {out[:200] or 'no output'}"})
+        return JSONResponse({"ok": True, "command": command,
+                             "message": "Added to Claude Code for all projects. Restart Claude Code to activate."})
     except Exception as e:
-        return JSONResponse({"ok": False, "message": str(e)})
+        log.warning(f"claude mcp add could not run: {e}")
+        return JSONResponse({"ok": False, "command": command,
+                             "message": f"Could not run the Claude Code CLI: {e}. Copy the command and run it in a terminal."})
+
+
+@app.get("/api/skills-status")
+async def skills_status():
+    return JSONResponse(await asyncio.to_thread(skills_installer.status))
+
+
+@app.post("/api/install-skills")
+async def install_skills():
+    """Copy the bundled skills into Claude Code (user level). Unattended; changed files are backed up."""
+    try:
+        result = await asyncio.to_thread(skills_installer.install)
+    except Exception as e:
+        log.warning(f"Skills install failed: {e}")
+        return JSONResponse({"ok": False, "message": f"Skills install failed: {e}"})
+    log.info(f"Skills install: {result.get('message')}")
+    return JSONResponse(result)
+
+
+@app.get("/api/workflows-status")
+async def workflows_status():
+    """Do the workflows in this database match the ones shipped in this build?"""
+    try:
+        return JSONResponse(await workflows_sync.status(get_db(), _workflows_and_agents_dir()))
+    except Exception as e:
+        log.warning(f"Workflow check failed: {e}")
+        return JSONResponse({"state": "unavailable", "total": 0, "differs": [], "message": f"Could not check the workflows: {e}"})
+
+
+# Feedback goes to a public HubSpot form endpoint. No key is involved; the ids are not secrets.
+# Shown on the setup page and sent with feedback. Bump it when a release is cut.
+APP_VERSION = "1.5.0"
+
+FEEDBACK_ENDPOINT = ("https://api.hsforms.com/submissions/v3/integration/submit/"
+                     "342296015/ec0616e6-8af0-4be5-84c4-0e31dfd4e457")
+FEEDBACK_TYPES = {"bug": "Bug report", "request": "Feature request",
+                  "question": "Question", "updates": "Keep me updated"}
+
+
+@app.post("/api/feedback")
+async def send_feedback(request: Request):
+    """Send one note the user wrote on the setup page. Only the type, the optional email and the message leave this computer."""
+    # The form has three fields: feedback_type (one of FEEDBACK_TYPES), email and message.
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "message": "That request was not valid."})
+    kind = FEEDBACK_TYPES.get(str(body.get("type", "")))
+    email = str(body.get("email", "")).strip()
+    message = str(body.get("message", "")).strip()
+    if not kind:
+        return JSONResponse({"ok": False, "message": "Choose what this is about."})
+    if kind == "Keep me updated" and not email:
+        return JSONResponse({"ok": False, "message": "Add your email address so we can send you updates."})
+    if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        return JSONResponse({"ok": False, "message": "That email address does not look right."})
+    if not message and kind != "Keep me updated":
+        return JSONResponse({"ok": False, "message": "Write a short message first."})
+    if len(message) > 5000:
+        return JSONResponse({"ok": False, "message": "Please keep the message under 5000 characters."})
+    fields = [{"name": "feedback_type", "value": kind},
+              {"name": "message", "value": message or "(no message)"}]
+    if email:
+        fields.append({"name": "email", "value": email})
+    payload = {"fields": fields,
+               "context": {"pageUri": "speakmanai-exe://setup", "pageName": f"SpeakmanAI exe setup page v{APP_VERSION}"}}
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.post(FEEDBACK_ENDPOINT, json=payload)
+    except Exception as e:
+        log.warning(f"Feedback not sent: {e}")
+        return JSONResponse({"ok": False, "message": "Could not reach the server. Check your internet connection and try again. Nothing was sent."})
+    if r.status_code != 200:
+        log.warning(f"Feedback rejected: HTTP {r.status_code}")
+        return JSONResponse({"ok": False, "message": f"The server did not accept it (HTTP {r.status_code}). Nothing was saved. Try again later."})
+    log.info(f"Feedback sent: {kind}")
+    return JSONResponse({"ok": True, "message": "Sent. Thank you."})
+
+
+@app.post("/api/update-workflows")
+async def update_workflows():
+    """Replace the shipped workflows that differ from this build. The replaced versions are backed up first."""
+    try:
+        result = await workflows_sync.apply(get_db(), _workflows_and_agents_dir(), Path.home() / ".speakmanai" / "backups")
+    except Exception as e:
+        log.warning(f"Workflow update failed: {e}")
+        return JSONResponse({"ok": False, "message": f"Workflow update failed: {e}"})
+    log.info(f"Workflow update: {result.get('message')}")
+    return JSONResponse(result)
+
+
+@app.get("/downloads/skills/{name}")
+async def download_skills_bundle(name: str):
+    manifest = skills_installer.load_manifest() or {}
+    if name not in manifest.get("downloads", {}):
+        raise HTTPException(status_code=404, detail="Unknown download.")
+    return FileResponse(skills_installer.bundle_dir() / "downloads" / name, filename=name,
+                        media_type="application/octet-stream" if name.endswith(".mcpb") else "application/zip")
+
+
+@app.get("/favicon.png")
+async def favicon():
+    """The browser tab icon for the setup page (assets/favicon.png, bundled in the exe)."""
+    import sys
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent.parent.parent))
+    path = base / "assets" / "favicon.png"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="No icon.")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
 
 def _build_setup_html(cfg: dict) -> str:
     """Generate the setup page HTML."""
     provider       = cfg.get("llm_provider", "gemini")
+    saved_exec     = cfg.get("execution_mode", "auto")
+    if saved_exec not in _EXECUTION_MODES:
+        saved_exec = "auto"
     saved_fast     = cfg.get("default_model", "")
     saved_standard = cfg.get("standard_model", "")
     saved_advanced = cfg.get("advanced_model", "")
     saved_gcp_project = cfg.get("gcp_project_id", "")
     saved_gcp_region  = cfg.get("gcp_region", "us-east1")
+    configured = _model_api_configured()
+    configured_js = "true" if configured else "false"
+    has_key_js = json.dumps({p: bool(cfg.get(f"{p}_api_key")) for p in ("gemini", "anthropic", "openai")})
+    # The model section starts open only for someone who already uses a model API.
+    model_open = "open" if configured else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SPEAKMAN.AI Setup</title>
+<link rel="icon" type="image/png" href="/favicon.png">
 <style>
   *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{ font-family: system-ui, -apple-system, sans-serif; background: #0a0f1a; color: #e2e8f0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }}
-  .card {{ background: #111827; border-radius: 12px; padding: 32px; width: 100%; max-width: 520px; box-shadow: 0 4px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,255,127,0.08); }}
+  body {{ font-family: system-ui, -apple-system, sans-serif; background: #0a0f1a; color: #e2e8f0; min-height: 100vh; display: flex; align-items: flex-start; justify-content: center; padding: 40px 24px; }}
+  .card {{ background: #111827; border-radius: 12px; padding: 32px; width: 100%; max-width: 560px; box-shadow: 0 4px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,255,127,0.08); }}
   .brand {{ font-size: 1.5rem; font-weight: 800; color: #00ff7f; letter-spacing: 0.04em; margin-bottom: 4px; }}
   .subtitle {{ color: #64748b; font-size: 0.875rem; margin-bottom: 28px; }}
   h2 {{ font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: #475569; margin-bottom: 12px; }}
@@ -1641,7 +2242,8 @@ def _build_setup_html(cfg: dict) -> str:
   .radio-group label.active {{ border-color: #00ff7f; background: #021a0d; color: #00ff7f; }}
   .radio-group label:hover:not(.active) {{ border-color: #334155; color: #e2e8f0; }}
   label.field-label {{ display: block; font-size: 0.8rem; color: #64748b; margin-bottom: 4px; margin-top: 12px; }}
-  input[type=text], input[type=password], select {{ width: 100%; background: #0a0f1a; border: 1px solid #1e293b; border-radius: 6px; padding: 8px 12px; color: #e2e8f0; font-size: 0.875rem; }}
+  textarea {{ width: 100%; background: #0a0f1a; border: 1px solid #1e293b; border-radius: 6px; padding: 8px 12px; color: #e2e8f0; font-size: 0.875rem; font-family: inherit; resize: vertical; }}
+  input[type=text], input[type=email], input[type=password], select {{ width: 100%; background: #0a0f1a; border: 1px solid #1e293b; border-radius: 6px; padding: 8px 12px; color: #e2e8f0; font-size: 0.875rem; }}
   input:focus, select:focus {{ outline: none; border-color: #00ff7f; box-shadow: 0 0 0 2px rgba(0,255,127,0.12); }}
   select option {{ background: #111827; }}
   .btn {{ display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; border-radius: 8px; font-size: 0.875rem; font-weight: 600; cursor: pointer; border: none; transition: all 0.15s; }}
@@ -1649,10 +2251,41 @@ def _build_setup_html(cfg: dict) -> str:
   .btn-primary:hover {{ background: #00e070; box-shadow: 0 0 16px rgba(0,255,127,0.3); }}
   .btn-outline {{ background: transparent; border: 2px solid #1e293b; color: #94a3b8; }}
   .btn-outline:hover {{ border-color: #00ff7f; color: #00ff7f; background: #021a0d; }}
-  .connect-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }}
-  .status-dot {{ width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: #ef4444; }}
+  .copy-row {{ display: flex; align-items: center; gap: 8px; margin-top: 6px; }}
+  .copy-row code {{ flex: 1; background: #0a0f1a; border: 1px solid #1e293b; border-radius: 8px; padding: 8px 12px; font-size: 0.75rem; color: #94a3b8; overflow-x: auto; white-space: nowrap; }}
+  .btn-copy {{ padding: 6px 12px; font-size: 0.75rem; }}
+  .status-dot {{ width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: #475569; flex: none; }}
   .status-dot.up {{ background: #00ff7f; }}
-  .warning {{ background: #1a0f00; border: 1px solid #78350f; border-radius: 6px; padding: 10px 12px; font-size: 0.8rem; color: #fbbf24; margin-top: 8px; }}
+  .status-dot.warn {{ background: #f59e0b; }}
+  .status-line {{ display: flex; align-items: center; gap: 8px; font-size: 0.875rem; color: #cbd5e1; margin-bottom: 4px; }}
+  .note {{ background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; padding: 10px 12px; font-size: 0.8rem; color: #94a3b8; margin-top: 8px; }}
+  .choice-group {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }}
+  .choice {{ cursor: pointer; border: 2px solid #1e293b; border-radius: 10px; padding: 14px; transition: all 0.15s; }}
+  .choice:hover:not(.active) {{ border-color: #334155; }}
+  .choice.active {{ border-color: #00ff7f; background: #021a0d; }}
+  .choice-title {{ font-weight: 700; font-size: 0.95rem; color: #e2e8f0; }}
+  .choice.active .choice-title {{ color: #00ff7f; }}
+  .choice-sub {{ font-size: 0.75rem; color: #64748b; margin-top: 4px; }}
+  .panel {{ margin-top: 14px; padding: 14px; border: 1px solid #1e293b; border-radius: 10px; background: #0d1422; }}
+  .panel .btn-primary {{ margin-top: 8px; }}
+  .btn-row {{ display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }}
+  a.btn {{ text-decoration: none; }}
+  .btn:disabled {{ opacity: 0.6; cursor: default; }}
+  .warn-box {{ margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: #1c1405; border: 1px solid #78350f; font-size: 0.8rem; color: #fcd34d; }}
+  .warn-box .btn {{ margin-top: 8px; }}
+  .next-box {{ margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: #021a0d; border: 1px solid #14532d; font-size: 0.8rem; color: #a7f3d0; }}
+  .steps {{ margin: 8px 0 4px 18px; font-size: 0.8rem; color: #94a3b8; }}
+  .steps li {{ margin-bottom: 8px; }}
+  .panel a:not(.btn) {{ color: #00ff7f; }}
+  #assistant-group label {{ padding: 8px 11px; font-size: 0.82rem; }}
+  code {{ font-size: 0.78rem; color: #cbd5e1; }}
+  details.fold {{ border-top: 1px solid #1e293b; padding: 14px 0 4px; }}
+  details.fold > summary {{ cursor: pointer; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; list-style-position: inside; }}
+  details.fold[open] > summary {{ margin-bottom: 8px; }}
+  details.sub {{ margin-top: 10px; }}
+  details.sub > summary {{ cursor: pointer; font-size: 0.75rem; color: #64748b; }}
+  .opt {{ text-transform: none; letter-spacing: 0; font-weight: 400; color: #475569; margin-left: 6px; }}
+  .fold-state {{ float: right; text-transform: none; letter-spacing: 0; font-weight: 400; color: #94a3b8; }}
   .exec-hint {{ font-size: 0.75rem; color: #475569; margin-top: 6px; min-height: 1.5em; }}
   .toast {{ position: fixed; bottom: 24px; right: 24px; background: #00ff7f; color: #0a0f1a; padding: 12px 20px; border-radius: 8px; font-weight: 700; font-size: 0.875rem; opacity: 0; transition: opacity 0.3s; pointer-events: none; }}
   .toast.show {{ opacity: 1; }}
@@ -1664,76 +2297,214 @@ def _build_setup_html(cfg: dict) -> str:
 <body>
 <div class="card">
   <div class="brand">SPEAKMAN.AI</div>
-  <p class="subtitle">Configure your AI provider and connect to your AI assistant.</p>
+  <p class="subtitle">Run multi-agent workflows through the AI assistant you already use. No API key needed to start.</p>
 
-  <div class="section">
-    <h2>Choose your AI Provider</h2>
-    <div class="radio-group" id="provider-group">
-      <label class="{'active' if provider == 'gemini' else ''}" onclick="setProvider('gemini')"><span>Gemini</span></label>
-      <label class="{'active' if provider == 'anthropic' else ''}" onclick="setProvider('anthropic')"><span>Claude</span></label>
-      <label class="{'active' if provider == 'openai' else ''}" onclick="setProvider('openai')"><span>OpenAI</span></label>
-      <label class="{'active' if provider == 'vertexai' else ''}" onclick="setProvider('vertexai')"><span>Vertex AI</span></label>
-      <label class="{'active' if provider == 'ollama' else ''}" onclick="setProvider('ollama')"><span>Ollama</span></label>
-    </div>
+  <div class="note" id="mode-warning" style="display:none; margin-bottom:20px">
+    No model API is set up, but this install is set to run AI steps on one, so those steps will fail.
+    <div class="btn-row"><button class="btn btn-outline" onclick="chooseRunner('assistant')">Let my assistant run the steps</button></div>
   </div>
 
-  <div id="cloud-section" class="section">
-    <div id="api-key-field">
-      <label class="field-label">API Key</label>
-      <input type="password" id="api-key" placeholder="Paste your API key…">
+  <div class="section" id="runner-section" style="display:none">
+    <h2>Who runs the AI steps?</h2>
+    <div class="choice-group">
+      <div class="choice" id="choice-assistant" onclick="chooseRunner('assistant')">
+        <div class="choice-title">My AI assistant</div>
+        <div class="choice-sub">No API key. Your connected assistant does the work.</div>
+      </div>
+      <div class="choice" id="choice-model" onclick="chooseRunner('model')">
+        <div class="choice-title">My own model API</div>
+        <div class="choice-sub">Steps run in the background on your provider.</div>
+      </div>
     </div>
-    <div id="vertex-fields" style="display:none">
-      <label class="field-label">GCP Project ID</label>
-      <input type="text" id="gcp-project-id" placeholder="my-gcp-project" value="{saved_gcp_project}">
-      <label class="field-label">GCP Region</label>
-      <input type="text" id="gcp-region" placeholder="us-east1" value="{saved_gcp_region}">
-      <div class="warning">Uses Application Default Credentials — no API key needed. Run <code>gcloud auth application-default login</code> on this machine first.</div>
-    </div>
-    <label class="field-label">Fast model (quick, lightweight steps)</label>
-    <select id="default-model"></select>
-    <label class="field-label">Standard model (general reasoning)</label>
-    <select id="standard-model"></select>
-    <label class="field-label">Advanced model (complex, multi-step reasoning)</label>
-    <select id="advanced-model"></select>
-  </div>
-
-  <div id="ollama-section" class="section">
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-      <span id="ollama-dot" class="status-dot"></span>
-      <span id="ollama-status" style="font-size:0.875rem;color:#64748b;">Checking…</span>
-    </div>
-    <label class="field-label">Base URL</label>
-    <input type="text" id="ollama-url" value="http://localhost:11434">
-    <label class="field-label">Model</label>
-    <select id="ollama-model" onchange="checkModelSize()"><option>Loading…</option></select>
-    <div id="ollama-warning" class="warning" style="display:none">
-      ⚠ Models under 14B often produce incomplete outputs for multi-step workflows.
-      A 14B+ model (~10 GB RAM) is recommended. 32B+ for best quality.
-    </div>
+    <div class="exec-hint" id="runner-hint"></div>
   </div>
 
   <div class="section">
-    <label class="field-label">Execution Mode</label>
+    <h2>Connect your AI assistant</h2>
+    <div class="radio-group" id="assistant-group">
+      <label data-a="claude_code" onclick="setAssistant('claude_code')">Claude Code</label>
+      <label data-a="claude_app" onclick="setAssistant('claude_app')">Claude app</label>
+      <label data-a="copilot" onclick="setAssistant('copilot')">Copilot Studio</label>
+      <label data-a="cursor" onclick="setAssistant('cursor')">Cursor</label>
+      <label data-a="codex" onclick="setAssistant('codex')">Codex</label>
+    </div>
+
+    <div class="panel" id="panel-claude_code">
+      <div class="exec-hint" style="margin-bottom:10px">Recommended for Claude Code in a terminal. No admin rights needed. (The Claude app's Code tab also works with the extension on the Claude app tab, with no terminal.)</div>
+      <div class="status-line"><span class="status-dot" id="cc-dot"></span><span id="cc-status">Checking for Claude Code...</span></div>
+      <div id="cc-ready" style="display:none">
+        <button class="btn btn-primary" id="cc-connect" onclick="connectClient('claude_code')">Connect Claude Code</button>
+        <div class="exec-hint" id="cc-hint">One click: registers this server for all your projects and installs the skills.</div>
+      </div>
+      <div id="cc-missing" style="display:none">
+        <div class="btn-row" style="margin-top:0">
+          <button class="btn btn-primary" style="width:auto" onclick="refreshAssistantStatus(true)">Check again</button>
+          <a class="btn btn-outline" href="https://code.claude.com/docs/en/overview" target="_blank" rel="noopener">Official install steps</a>
+        </div>
+        <ol class="steps">
+          <li>Paste this into PowerShell:
+            <div class="copy-row"><code id="cc-install-cmd">irm https://claude.ai/install.ps1 | iex</code><button class="btn btn-outline btn-copy" onclick="copyText('cc-install-cmd')">Copy</button></div>
+            <div class="exec-hint">It prints nothing for a few minutes (about 3 to 5, depending on your connection) while it downloads. Leave the window open until it says it installed Claude Code.</div></li>
+          <li>Run <code>claude</code> once and sign in when your browser opens.</li>
+          <li>Press Check again.</li>
+        </ol>
+      </div>
+      <div class="next-box" id="cc-next" style="display:none">Next: open Claude Code in any folder and type <code>/generate-sad</code>. Restart it first if it was already open.<br>In the Claude app, quit it fully (including the tray icon) and reopen it, then use its Code tab. The chat side of the app is separate: see the Claude app tab.</div>
+      <div class="exec-hint" id="skills-status"></div>
+      <button class="btn btn-outline" id="skills-btn" onclick="installSkills()" style="display:none; margin-top:6px;">Install skills for Claude Code</button>
+      <details class="sub" id="cc-path" style="display:none">
+        <summary>Can't start <code>claude</code> in a terminal?</summary>
+        <div class="exec-hint">The installer did not add it to your PATH. Connecting from this page works either way, but the first run of <code>claude</code> is where you sign in. To run it by its full path:</div>
+        <div class="copy-row"><code id="cc-path-run">&amp; "$env:USERPROFILE\\.local\\bin\\claude.exe"</code><button class="btn btn-outline btn-copy" onclick="copyText('cc-path-run')">Copy</button></div>
+        <div class="exec-hint">Or add it to PATH once, then open a new terminal:</div>
+        <div class="copy-row"><code id="cc-path-add">[Environment]::SetEnvironmentVariable("Path", $env:Path + ";$env:USERPROFILE\\.local\\bin", "User")</code><button class="btn btn-outline btn-copy" onclick="copyText('cc-path-add')">Copy</button></div>
+        <div class="exec-hint"><a href="https://code.claude.com/docs/en/troubleshoot-install#command-not-found-claude-after-installation" target="_blank" rel="noopener">Anthropic's PATH help</a></div>
+      </details>
+      <details class="sub" id="cc-manual">
+        <summary>Do it by hand</summary>
+        <div class="exec-hint">Run this in a terminal, then restart Claude Code:</div>
+        <div class="copy-row"><code id="cc-cmd"></code><button class="btn btn-outline btn-copy" onclick="copyText('cc-cmd')">Copy</button></div>
+      </details>
+    </div>
+
+    <div class="panel" id="panel-claude_app" style="display:none">
+      <div class="exec-hint">For the Claude app: chat, Cowork and the Code tab. For Claude Code in a terminal, use the Claude Code tab instead.</div>
+      <div class="exec-hint" style="margin-top:8px">The app's Add custom connector screen cannot take this address, because Anthropic's servers make that call and they cannot reach your computer. Use the extension instead. It is one small file, with no Node and no admin rights:</div>
+      <ol class="steps">
+        <li>Download <span class="dl" data-name="speakmanai-local.mcpb"></span>.</li>
+        <li>In the Claude app open Settings, Extensions, Advanced settings, Install Extension, and pick that file. Double-clicking it does not work on Windows.</li>
+        <li>The app shows a red warning because the extension is not from Anthropic's directory. It only passes requests to this server on your computer. Press Install.</li>
+        <li>Leave the port as <code class="port">8000</code> unless this page is on another. Save stays grey until you edit the field: change the number and change it back.</li>
+        <li>Turn the extension on (it installs switched off), keep this program running, and start a new chat.</li>
+      </ol>
+      <div class="exec-hint" style="margin-top:8px">Cowork and the chat are one screen, so this covers both. Without the extension the guide also has a config-file route, which needs Node installed for your user. This server's address, for that route:</div>
+      <div class="copy-row"><code class="mcp-url" id="mcp-url-app"></code><button class="btn btn-outline btn-copy" onclick="copyText('mcp-url-app')">Copy</button></div>
+      <div class="exec-hint" style="margin-top:8px">Optional: the skills plugin, to upload in the app's plugin settings (all 17 skills in one upload): <span class="dl" data-name="speakmanai-sdlc.zip"></span>. It is needed for slash commands such as <code>/generate-sad</code>; without it the app can still fetch skills from this server.</div>
+      <div class="exec-hint" style="margin-top:8px">Full guide: <a href="https://github.com/speakmancip/speakmanai-cc/blob/master/desktop-skills/CLAUDE_APP.md" target="_blank" rel="noopener">CLAUDE_APP.md</a>. Cowork uses the same steps (it needs one admin approval to install).</div>
+    </div>
+
+    <div class="panel" id="panel-copilot" style="display:none">
+      <div class="exec-hint">Manual setup. Copilot Studio runs in the cloud, so it cannot reach this computer directly.</div>
+      <ol class="steps">
+        <li>Forward port <span class="port"></span> to a public URL (for example VS Code port forwarding), and open <code>/setup</code> through that URL once.</li>
+        <li>In your agent, add an MCP connector using the public URL followed by <code>/mcp</code>.</li>
+        <li>Download <span class="dl" data-name="copilot-studio-skills.zip"></span>, unzip it, and upload each item in the agent's Skills tab (17 uploads).</li>
+      </ol>
+      <div class="exec-hint">Full guide: <a href="https://github.com/speakmancip/speakmanai-cc/blob/master/desktop-skills/COPILOT_STUDIO.md" target="_blank" rel="noopener">COPILOT_STUDIO.md</a></div>
+    </div>
+
+    <div class="panel" id="panel-cursor" style="display:none">
+      <div class="exec-hint">Not tested yet. Add this MCP server URL in Cursor's MCP settings:</div>
+      <div class="copy-row"><code class="mcp-url" id="mcp-url-cursor"></code><button class="btn btn-outline btn-copy" onclick="copyText('mcp-url-cursor')">Copy</button></div>
+    </div>
+
+    <div class="panel" id="panel-codex" style="display:none">
+      <div class="exec-hint">Not tested yet. Add this MCP server URL in Codex's MCP settings:</div>
+      <div class="copy-row"><code class="mcp-url" id="mcp-url-codex"></code><button class="btn btn-outline btn-copy" onclick="copyText('mcp-url-codex')">Copy</button></div>
+    </div>
+  </div>
+
+  <div class="warn-box" id="wf-box" style="display:none">
+    <div id="wf-text"></div>
+    <button class="btn btn-outline" id="wf-btn" onclick="updateWorkflows()">Update workflows</button>
+  </div>
+
+  <details class="fold" id="model-fold" {model_open}>
+    <summary>Model API <span class="opt">optional</span><span class="fold-state" id="model-state"></span></summary>
+    <div class="exec-hint" id="model-hint"></div>
+
+    <div class="section" style="margin-top:14px">
+      <div class="radio-group" id="provider-group">
+        <label class="{'active' if provider == 'gemini' else ''}" onclick="setProvider('gemini')"><span>Gemini</span></label>
+        <label class="{'active' if provider == 'anthropic' else ''}" onclick="setProvider('anthropic')"><span>Claude</span></label>
+        <label class="{'active' if provider == 'openai' else ''}" onclick="setProvider('openai')"><span>OpenAI</span></label>
+        <label class="{'active' if provider == 'vertexai' else ''}" onclick="setProvider('vertexai')"><span>Vertex AI</span></label>
+        <label class="{'active' if provider == 'ollama' else ''}" onclick="setProvider('ollama')"><span>Ollama</span></label>
+      </div>
+    </div>
+
+    <div id="cloud-section" class="section">
+      <div id="api-key-field">
+        <label class="field-label">API Key</label>
+        <input type="password" id="api-key" placeholder="Paste your API key">
+      </div>
+      <div id="vertex-fields" style="display:none">
+        <label class="field-label">GCP Project ID</label>
+        <input type="text" id="gcp-project-id" placeholder="my-gcp-project" value="{saved_gcp_project}">
+        <label class="field-label">GCP Region</label>
+        <input type="text" id="gcp-region" placeholder="us-east1" value="{saved_gcp_region}">
+        <div class="note">Vertex AI signs in with your Google account, so there is no API key. Run <code>gcloud auth application-default login</code> on this computer once.</div>
+      </div>
+      <label class="field-label">Fast model (quick, lightweight steps)</label>
+      <select id="default-model"></select>
+      <label class="field-label">Standard model (general reasoning)</label>
+      <select id="standard-model"></select>
+      <label class="field-label">Advanced model (complex, multi-step reasoning)</label>
+      <select id="advanced-model"></select>
+    </div>
+
+    <div id="ollama-section" class="section">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <span id="ollama-dot" class="status-dot"></span>
+        <span id="ollama-status" style="font-size:0.875rem;color:#64748b;">Checking...</span>
+      </div>
+      <label class="field-label">Base URL</label>
+      <input type="text" id="ollama-url" value="http://localhost:11434">
+      <label class="field-label">Model</label>
+      <select id="ollama-model" onchange="checkModelSize()"><option>Loading...</option></select>
+      <div id="ollama-warning" class="note" style="display:none">
+        Models under 14B often produce incomplete outputs for multi-step workflows.
+        A 14B+ model (~10 GB RAM) is recommended. 32B+ for best quality.
+      </div>
+    </div>
+
+    <button class="btn btn-primary" onclick="saveConfig()">Save model settings</button>
+  </details>
+
+  <details class="fold" id="adv-fold">
+    <summary>Advanced</summary>
+    <label class="field-label">Execution mode</label>
     <select id="exec-mode" onchange="updateExecHint()">
-      <option value="auto">Auto — use each agent's configured model</option>
-      <option value="force_delegate">Force Delegate — your AI assistant executes every step</option>
-      <option value="force_background">Force Background — run all steps with the LLM above (no assistant handoff)</option>
+      <option value="delegate_only">Delegate Only: your assistant runs every AI step, model API paused</option>
+      <option value="auto">Auto: each agent uses its configured model</option>
+      <option value="force_delegate">Force Delegate: your assistant runs every AI step, validators use the model API</option>
+      <option value="force_background">Force Background: every step runs on the model API</option>
     </select>
     <div class="exec-hint" id="exec-hint"></div>
-  </div>
+    <button class="btn btn-outline" style="margin-top:10px" onclick="saveMode()">Apply mode</button>
+  </details>
 
-  <button class="btn btn-primary" onclick="saveConfig()">Save &amp; Apply</button>
-
-  <hr class="divider">
-
-  <div class="section">
-    <h2>Connect your AI Assistant</h2>
-    <div class="connect-grid">
-      <button class="btn btn-outline" onclick="connectClient('claude_desktop')">Claude Desktop</button>
-      <button class="btn btn-outline" onclick="connectClient('claude_code')">Claude Code</button>
-      <button class="btn btn-outline" onclick="connectClient('cursor')">Cursor</button>
+  <details class="fold" id="ra-fold">
+    <summary>Remote access <span class="opt">optional</span><span class="fold-state" id="ra-state"></span></summary>
+    <div class="exec-hint">Off by default: only this computer can use SpeakmanAI. Turn it on only if a tool that runs somewhere else, such as Copilot Studio through a tunnel, has to reach it. Anyone who has the tunnel address and the token can run your engine, so turn it off and stop the tunnel when you are done.</div>
+    <div id="ra-on" style="display:none">
+      <label class="field-label">Access token</label>
+      <div class="copy-row"><code id="ra-token"></code><button class="btn btn-outline btn-copy" onclick="copyText('ra-token')">Copy</button></div>
+      <div class="exec-hint">Send it with each request as the header <code>x-api-key</code>, or as <code>Authorization: Bearer</code> followed by the token. Not yet tested with Copilot Studio.</div>
+      <button class="btn btn-outline" style="margin-top:10px" onclick="regenToken()">Make a new token</button>
     </div>
-  </div>
+    <button class="btn btn-outline" style="margin-top:10px" id="ra-btn" onclick="toggleRemote()">Turn on</button>
+  </details>
+
+  <details class="fold" id="fb-fold">
+    <summary>Send feedback <span class="opt">optional</span></summary>
+    <label class="field-label">What is this about?</label>
+    <select id="fb-type" onchange="fbChange()">
+      <option value="bug">Bug report</option>
+      <option value="request">Feature request</option>
+      <option value="question">Question</option>
+      <option value="updates">Keep me updated (product news by email)</option>
+    </select>
+    <label class="field-label" id="fb-email-label">Your email (optional, add one if you want a reply)</label>
+    <input type="email" id="fb-email" autocomplete="email" oninput="fbPreview()">
+    <label class="field-label">Message</label>
+    <textarea id="fb-message" rows="4" maxlength="5000" oninput="fbPreview()"></textarea>
+    <div class="exec-hint" id="fb-preview"></div>
+    <div class="exec-hint" id="fb-consent" style="display:none">By sending this you agree to receive product emails from SPEAKMAN.AI. You can unsubscribe at any time.</div>
+    <button class="btn btn-outline" style="margin-top:10px" onclick="sendFeedback()">Send</button>
+  </details>
+
+  <div class="exec-hint" id="app-version" style="text-align:center; margin-top:18px">SPEAKMAN.AI v{APP_VERSION}. Mention this version in any bug report.</div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -1741,25 +2512,221 @@ def _build_setup_html(cfg: dict) -> str:
 <script>
 const MODELS = {{
   gemini:    {{ fast: ['gemini-3.5-flash-lite','gemini-3.1-flash-lite','gemini-3.8-flash'], standard: ['gemini-3.8-flash','gemini-3-flash-preview','gemini-3.5-flash-lite'], advanced: ['gemini-3.1-pro-preview','gemini-3.8-flash'] }},
-  anthropic: {{ fast: ['claude-haiku-4-5-20251001','claude-sonnet-4-6'], standard: ['claude-sonnet-4-6','claude-haiku-4-5-20251001','claude-sonnet-5'], advanced: ['claude-opus-4-8','claude-sonnet-4-6','claude-sonnet-5','claude-fable-5'] }},
-  openai:    {{ fast: ['gpt-4o-mini','gpt-4o'], standard: ['gpt-4o','gpt-4o-mini'], advanced: ['gpt-4o','gpt-4o-mini'] }},
+  anthropic: {{ fast: ['claude-sonnet-5-5','claude-opus-5-5'], standard: ['claude-sonnet-5-5','claude-sonnet-4-6','claude-sonnet-5'], advanced: ['claude-opus-5-5','claude-sonnet-5-5','claude-opus-4-8','claude-sonnet-4-6','claude-sonnet-5','claude-fable-5'] }},
+  openai:    {{ fast: ['gpt-6-luna','gpt-6.1-sol','gpt-4o-mini'], standard: ['gpt-6.1-sol','gpt-6-luna','gpt-4o'], advanced: ['gpt-6-astra','gpt-6.1-sol','gpt-4o'] }},
   vertexai:  {{ fast: ['gemini-3.5-flash-lite','gemini-3.1-flash-lite','gemini-3.8-flash'], standard: ['gemini-3.8-flash','gemini-3-flash-preview','gemini-3.5-flash-lite'], advanced: ['gemini-3.1-pro-preview','gemini-3.8-flash'] }},
   ollama:    {{ fast: [], standard: [], advanced: [] }},
 }};
+const PROVIDER_NAMES = {{ gemini: 'Gemini', anthropic: 'Claude', openai: 'OpenAI', vertexai: 'Vertex AI', ollama: 'Ollama' }};
 
 const SAVED = {{ fast: '{saved_fast}', standard: '{saved_standard}', advanced: '{saved_advanced}' }};
+const HAS_KEY = {has_key_js};
+const SAVED_PROVIDER = '{provider}';
+const MCP_PORT = Number(location.port) || 8000;
+const MCP_URL = 'http://localhost:' + MCP_PORT + '/mcp';
 
 let currentProvider = '{provider}';
+let modelConfigured = {configured_js};
+let execMode = '{saved_exec}';
+// Adding a first model API is a request to use it. Editing an existing one is not.
+const CONFIGURED_AT_LOAD = modelConfigured;
 
+const $ = id => document.getElementById(id);
+
+// ---- Who runs the AI steps ----
+function renderRunner() {{
+  const assistant = execMode === 'delegate_only' || execMode === 'force_delegate';
+  // The choice, and the mode list under Advanced, only appear when there is something to
+  // choose between. With no model API the assistant runs the steps and that is all.
+  $('runner-section').style.display = modelConfigured ? 'block' : 'none';
+  $('adv-fold').style.display = (modelConfigured || !assistant) ? '' : 'none';
+  $('mode-warning').style.display = (!modelConfigured && !assistant) ? 'block' : 'none';
+  $('choice-assistant').classList.toggle('active', assistant);
+  $('choice-model').classList.toggle('active', !assistant);
+  let hint;
+  if (execMode === 'delegate_only') hint = 'Your connected assistant runs every AI step. No model API is called, and your saved model settings are kept.';
+  else if (execMode === 'force_delegate') hint = 'Your connected assistant runs every AI step. Validators still use your model API. (Force Delegate, set under Advanced.)';
+  else if (execMode === 'force_background') hint = 'Every step runs on your model API. (Force Background, set under Advanced.)';
+  else hint = 'AI steps run on your model API (' + (PROVIDER_NAMES[SAVED_PROVIDER] || SAVED_PROVIDER) + '). Steps a workflow marks for your assistant still go to your assistant.';
+  $('runner-hint').textContent = hint;
+  $('model-state').textContent = modelConfigured ? (PROVIDER_NAMES[SAVED_PROVIDER] || SAVED_PROVIDER) : 'not set';
+  $('model-hint').textContent = modelConfigured
+    ? 'Used when AI steps run on your own model API, and by validators.'
+    : 'Not needed: your assistant runs the AI steps. Add one if you want steps to run in the background on your own provider.';
+  $('exec-mode').value = execMode;
+  updateExecHint();
+}}
+
+async function postConfig(body) {{
+  const r = await fetch('/api/config', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(body) }});
+  const d = await r.json();
+  if (d.execution_mode) execMode = d.execution_mode;
+  if (typeof d.model_api_configured === 'boolean') modelConfigured = d.model_api_configured;
+  return d;
+}}
+
+async function chooseRunner(which) {{
+  const d = await postConfig(which === 'assistant' ? {{ execution_mode: 'delegate_only' }} : {{ use_model_api: true }});
+  showToast(d.ok ? (which === 'assistant' ? 'Your assistant now runs the AI steps.' : d.message) : d.message, !d.ok);
+  renderRunner();
+}}
+
+// ---- Assistant picker ----
+function setAssistant(a) {{
+  document.querySelectorAll('#assistant-group label').forEach(l => l.classList.toggle('active', l.dataset.a === a));
+  document.querySelectorAll('.panel').forEach(p => p.style.display = p.id === 'panel-' + a ? 'block' : 'none');
+  try {{ localStorage.setItem('speakmanai-assistant', a); }} catch (e) {{}}
+}}
+
+async function refreshAssistantStatus(announce) {{
+  let st;
+  try {{ st = await (await fetch('/api/assistant-status')).json(); }} catch (e) {{ $('cc-status').textContent = 'Could not check for Claude Code.'; return; }}
+  const cc = st.claude_code;
+  // Registration runs the claude command, so there is nothing to click until it exists.
+  $('cc-ready').style.display = cc.cli_found ? 'block' : 'none';
+  $('cc-missing').style.display = cc.cli_found ? 'none' : 'block';
+  $('cc-path').style.display = cc.windows && cc.cli_found && !cc.cli_on_path ? 'block' : 'none';
+  $('cc-next').style.display = cc.registered ? 'block' : 'none';
+  $('cc-hint').style.display = cc.registered ? 'none' : 'block';
+  const btn = $('cc-connect');
+  if (cc.registered) {{
+    $('cc-dot').className = 'status-dot up';
+    $('cc-status').textContent = 'Connected to Claude Code.';
+    btn.textContent = 'Reconnect Claude Code';
+    btn.className = 'btn btn-outline';
+  }} else if (cc.cli_found) {{
+    $('cc-dot').className = 'status-dot';
+    $('cc-status').textContent = 'Claude Code found. Not connected yet.';
+    btn.textContent = 'Connect Claude Code';
+    btn.className = 'btn btn-primary';
+  }} else if (cc.detected) {{
+    $('cc-dot').className = 'status-dot warn';
+    $('cc-status').textContent = 'Claude Code data found (probably from the Claude app), but the command-line program is not installed. Install it below, then press Check again.';
+  }} else {{
+    $('cc-dot').className = 'status-dot warn';
+    $('cc-status').textContent = 'Claude Code CLI was not found on this computer.';
+  }}
+  modelConfigured = st.model_api_configured;
+  execMode = st.execution_mode;
+  renderRunner();
+  if (announce) showToast(cc.cli_found ? 'Claude Code found.' : 'Still not found. Install Claude Code and run it once.', !cc.cli_found);
+}}
+
+async function connectClient(name) {{
+  const btn = $('cc-connect');
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Connecting...';
+  try {{
+    const r = await fetch('/api/setup-mcp-client', {{
+      method: 'POST',
+      headers: {{'Content-Type':'application/json'}},
+      body: JSON.stringify({{ client: name, port: MCP_PORT }})
+    }});
+    const d = await r.json();
+    // Skills with no server behind them only confuse, so they are installed once the server is registered.
+    if (!d.ok) {{
+      showToast(d.message + ' The skills are installed when you connect.', true);
+      $('cc-manual').open = true;
+    }} else {{
+      const s = await postInstallSkills();
+      const skillsMsg = s.bundled === false ? '' : ' ' + s.message;
+      showToast(d.message + skillsMsg, s.ok === false && s.bundled !== false);
+    }}
+  }} finally {{
+    btn.disabled = false; btn.textContent = label;
+    await refreshAssistantStatus();
+    refreshSkillsStatus();
+  }}
+}}
+
+// ---- Skills ----
+async function postInstallSkills() {{
+  const st = await (await fetch('/api/skills-status')).json();
+  if (!st.bundled) return {{ ok: false, bundled: false, message: st.message }};
+  const r = await fetch('/api/install-skills', {{ method: 'POST' }});
+  return await r.json();
+}}
+
+async function installSkills() {{
+  const s = await postInstallSkills();
+  showToast(s.message, !s.ok);
+  refreshSkillsStatus();
+}}
+
+const SKILLS_STATE_TEXT = {{
+  not_installed:    'not installed yet',
+  up_to_date:       'installed and up to date',
+  update_available: 'update available',
+}};
+
+async function refreshSkillsStatus() {{
+  const el = $('skills-status');
+  const btn = $('skills-btn');
+  let st;
+  try {{ st = await (await fetch('/api/skills-status')).json(); }} catch (e) {{ el.textContent = ''; return; }}
+  const downloads = st.bundled ? st.downloads : [];
+  document.querySelectorAll('.dl').forEach(span => {{
+    const name = span.dataset.name;
+    span.textContent = '';
+    if (downloads.includes(name)) {{
+      const a = document.createElement('a');
+      a.href = '/downloads/skills/' + encodeURIComponent(name);
+      a.textContent = name;
+      span.appendChild(a);
+    }} else {{
+      span.textContent = name + ' (not included in this build)';
+    }}
+  }});
+  if (!st.bundled) {{ el.textContent = 'This build does not include the skills.'; btn.style.display = 'none'; return; }}
+  let text = st.skills + ' skills: ' + (SKILLS_STATE_TEXT[st.state] || st.state) + '.';
+  if (st.counts.modified) text += ' ' + st.counts.modified + ' files you changed will be backed up before they are replaced.';
+  el.textContent = text;
+  // A first install happens as part of Connect; this button is for updates.
+  btn.style.display = st.state === 'update_available' && st.claude_code_detected ? 'inline-flex' : 'none';
+  btn.textContent = 'Update skills';
+}}
+
+// ---- Workflows ----
+async function refreshWorkflowsStatus() {{
+  const box = $('wf-box');
+  let st;
+  try {{ st = await (await fetch('/api/workflows-status')).json(); }} catch (e) {{ box.style.display = 'none'; return; }}
+  if (st.state !== 'differs') {{ box.style.display = 'none'; return; }}
+  const n = st.differs.length;
+  const retired = st.differs.reduce((s, d) => s + d.agents_retired.length, 0);
+  let text = n + ' of ' + st.total + ' workflows on this computer differ from this version. They may be older, ' +
+    'missing review gates, or edited. Updating replaces them with this version. The versions it replaces are saved ' +
+    'first in your .speakmanai/backups folder. Workflows you created under your own name are not touched.';
+  if (retired) text += ' ' + retired + ' agent link' + (retired === 1 ? '' : 's') + ' that this version no longer uses will be removed from the workflows.';
+  $('wf-text').textContent = text;
+  box.style.display = 'block';
+}}
+
+async function updateWorkflows() {{
+  const btn = $('wf-btn');
+  btn.disabled = true; btn.textContent = 'Updating...';
+  try {{
+    const r = await (await fetch('/api/update-workflows', {{ method: 'POST' }})).json();
+    showToast(r.message, !r.ok);
+  }} catch (e) {{
+    showToast('Could not update the workflows: ' + e, true);
+  }} finally {{
+    btn.disabled = false; btn.textContent = 'Update workflows';
+    refreshWorkflowsStatus();
+  }}
+}}
+
+// ---- Model API ----
 function setProvider(p) {{
   currentProvider = p;
   document.querySelectorAll('#provider-group label').forEach((l,i) => {{
     l.classList.toggle('active', ['gemini','anthropic','openai','vertexai','ollama'][i] === p);
   }});
-  document.getElementById('cloud-section').style.display = p === 'ollama' ? 'none' : 'block';
-  document.getElementById('ollama-section').style.display = p === 'ollama' ? 'block' : 'none';
-  document.getElementById('api-key-field').style.display = p === 'vertexai' ? 'none' : 'block';
-  document.getElementById('vertex-fields').style.display = p === 'vertexai' ? 'block' : 'none';
+  $('cloud-section').style.display = p === 'ollama' ? 'none' : 'block';
+  $('ollama-section').style.display = p === 'ollama' ? 'block' : 'none';
+  $('api-key-field').style.display = p === 'vertexai' ? 'none' : 'block';
+  $('vertex-fields').style.display = p === 'vertexai' ? 'block' : 'none';
+  $('api-key').placeholder = HAS_KEY[p] ? 'Key saved. Paste a new one to replace it' : 'Paste your API key';
   if (p !== 'ollama') populateModelDropdowns(p);
   if (p === 'ollama') checkOllama();
 }}
@@ -1767,7 +2734,7 @@ function setProvider(p) {{
 function populateModelDropdowns(p) {{
   const m = MODELS[p] || {{ fast: [], standard: [], advanced: [] }};
   const fill = (id, opts, saved) => {{
-    const sel = document.getElementById(id);
+    const sel = $(id);
     sel.innerHTML = opts.map(o => `<option value="${{o}}">${{o}}</option>`).join('');
     if (saved && opts.includes(saved)) sel.value = saved;
   }};
@@ -1777,10 +2744,9 @@ function populateModelDropdowns(p) {{
 }}
 
 async function checkOllama() {{
-  const url = document.getElementById('ollama-url').value;
-  const dot = document.getElementById('ollama-dot');
-  const status = document.getElementById('ollama-status');
-  const sel = document.getElementById('ollama-model');
+  const dot = $('ollama-dot');
+  const status = $('ollama-status');
+  const sel = $('ollama-model');
   try {{
     const r = await fetch('/api/check-ollama');
     const d = await r.json();
@@ -1789,93 +2755,175 @@ async function checkOllama() {{
       status.textContent = 'Running';
       sel.innerHTML = d.models.length
         ? d.models.map(m => `<option value="${{m.name}}" data-param-size="${{m.parameter_size}}">${{m.name}}${{m.parameter_size ? ' (' + m.parameter_size + ')' : ''}}</option>`).join('')
-        : '<option>No models found — run: ollama pull qwen2.5:14b</option>';
+        : '<option>No models found. Run: ollama pull qwen2.5:14b</option>';
       checkModelSize();
     }} else {{
-      dot.className = 'status-dot';
-      status.textContent = 'Not running — start Ollama first';
+      dot.className = 'status-dot warn';
+      status.textContent = 'Ollama is not running. Start it, then pick Ollama again.';
       sel.innerHTML = '<option>Ollama offline</option>';
     }}
   }} catch(e) {{
-    dot.className = 'status-dot';
-    status.textContent = 'Cannot connect';
+    dot.className = 'status-dot warn';
+    status.textContent = 'Cannot reach Ollama';
   }}
 }}
 
 function checkModelSize() {{
-  const sel = document.getElementById('ollama-model');
-  const warn = document.getElementById('ollama-warning');
+  const sel = $('ollama-model');
+  const warn = $('ollama-warning');
   const opt = sel.options[sel.selectedIndex];
   const paramSize = opt ? opt.getAttribute('data-param-size') || '' : '';
-  // Use parameter_size from API (e.g. "8B", "14B") — fall back to parsing the name
+  // Use parameter_size from API (e.g. "8B", "14B"), falling back to parsing the name
   const match = paramSize.match(/(\\d+(?:\\.\\d+)?)/i) || (sel.value || '').match(/(\\d+)b/i);
   const size = match ? parseFloat(match[1]) : 99;
   warn.style.display = size < 14 ? 'block' : 'none';
 }}
 
-const EXEC_HINTS = {{
-  auto:             'Each agent runs with its own configured model. The provider chosen above is used to resolve abstract model tiers (fast / standard / advanced).',
-  force_delegate:   'Every AI step pauses and is handed to your connected AI assistant (e.g. Claude Code) to execute instead of the LLM.',
-  force_background: 'Any steps configured to delegate to an AI assistant are overridden and run automatically using the provider above — fully hands-off.',
-}};
-
-function updateExecHint() {{
-  const val = document.getElementById('exec-mode').value;
-  document.getElementById('exec-hint').textContent = EXEC_HINTS[val] || '';
-}}
-
 async function saveConfig() {{
   const p = currentProvider;
-  const body = {{
-    llm_provider: p,
-    execution_mode: document.getElementById('exec-mode').value,
-  }};
+  const body = {{ llm_provider: p }};
   if (p === 'ollama') {{
-    body.ollama_base_url = document.getElementById('ollama-url').value;
-    const ollamaModel = document.getElementById('ollama-model').value;
+    body.ollama_base_url = $('ollama-url').value;
+    const ollamaModel = $('ollama-model').value;
     body.default_model   = ollamaModel;
     body.standard_model  = ollamaModel;
     body.advanced_model  = ollamaModel;
   }} else if (p === 'vertexai') {{
-    body.gcp_project_id = document.getElementById('gcp-project-id').value;
-    body.gcp_region     = document.getElementById('gcp-region').value;
-    body.gemini_api_key = '';  // Vertex AI uses ADC, not an API key — clear any saved Gemini key
-    body.default_model   = document.getElementById('default-model').value;
-    body.standard_model  = document.getElementById('standard-model').value;
-    body.advanced_model  = document.getElementById('advanced-model').value;
+    if (!$('gcp-project-id').value.trim()) {{ showToast('Enter a GCP project ID first.', true); return; }}
+    body.gcp_project_id = $('gcp-project-id').value.trim();
+    body.gcp_region     = $('gcp-region').value.trim();
+    body.gemini_api_key = '';  // Vertex AI uses ADC, not an API key, so clear any saved Gemini key
+    body.default_model   = $('default-model').value;
+    body.standard_model  = $('standard-model').value;
+    body.advanced_model  = $('advanced-model').value;
   }} else {{
-    const key = document.getElementById('api-key').value;
-    if (key && !key.includes('••')) body[p + '_api_key'] = key;
+    const key = $('api-key').value;
+    if (!key && !HAS_KEY[p]) {{ showToast('Paste an API key first.', true); return; }}
+    if (key) body[p + '_api_key'] = key;
     if (p === 'gemini') {{ body.gcp_project_id = ''; body.gcp_region = ''; }}
-    body.default_model   = document.getElementById('default-model').value;
-    body.standard_model  = document.getElementById('standard-model').value;
-    body.advanced_model  = document.getElementById('advanced-model').value;
+    body.default_model   = $('default-model').value;
+    body.standard_model  = $('standard-model').value;
+    body.advanced_model  = $('advanced-model').value;
   }}
-  const r = await fetch('/api/config', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(body) }});
-  const d = await r.json();
-  showToast(d.ok ? 'Configuration saved!' : d.message, !d.ok);
+  // Setting up a first model API switches AI steps to it (the server only does so once an
+  // API is really set up). Editing an existing one leaves who-runs-the-steps alone.
+  if (!CONFIGURED_AT_LOAD) body.use_model_api = true;
+  const d = await postConfig(body);
+  if (d.ok) {{
+    if ($('api-key').value) {{ HAS_KEY[p] = true; $('api-key').value = ''; }}
+    let msg = d.message;
+    if (!body.use_model_api && (execMode === 'delegate_only') && modelConfigured) msg = 'Model settings saved. Your assistant still runs the AI steps. Choose "My own model API" at the top to use this model.';
+    showToast(msg);
+    setTimeout(() => location.reload(), 1600);
+  }} else {{
+    showToast(d.message, true);
+  }}
 }}
 
-async function connectClient(name) {{
-  const r = await fetch('/api/setup-mcp-client', {{
-    method: 'POST',
-    headers: {{'Content-Type':'application/json'}},
-    body: JSON.stringify({{ client: name }})
-  }});
+// ---- Advanced ----
+const EXEC_HINTS = {{
+  auto:             'Each agent runs with its own configured model. Steps a workflow marks for your assistant are handed to it.',
+  force_delegate:   'Every AI step pauses and is handed to your connected assistant. Validators still call your model API when one is set up.',
+  delegate_only:    'Every AI step is handed to your connected assistant and the model API is paused: no calls, no failures when you are out of credits, and your saved keys are kept. Validators are skipped and marked as such.',
+  force_background: 'Steps set to be handed to an assistant run on your model API instead. Fully hands-off, and needs a model API.',
+}};
+
+function updateExecHint() {{
+  $('exec-hint').textContent = EXEC_HINTS[$('exec-mode').value] || '';
+}}
+
+async function saveMode() {{
+  const mode = $('exec-mode').value;
+  const d = await postConfig({{ execution_mode: mode }});
+  const needsApi = (mode === 'auto' || mode === 'force_background') && !modelConfigured;
+  showToast(d.ok ? (needsApi ? 'Mode applied, but no model API is set up, so those steps will fail.' : 'Mode applied.') : d.message, !d.ok || needsApi);
+  renderRunner();
+}}
+
+// ---- Remote access ----
+let remoteOn = false;
+function renderRemote(d) {{
+  remoteOn = !!d.enabled;
+  $('ra-on').style.display = remoteOn ? 'block' : 'none';
+  $('ra-token').textContent = d.token || '';
+  $('ra-state').textContent = remoteOn ? 'on' : 'off';
+  $('ra-btn').textContent = remoteOn ? 'Turn off' : 'Turn on';
+}}
+async function postRemote(body) {{
+  const r = await fetch('/api/remote-access', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(body) }});
   const d = await r.json();
+  if (d.ok) renderRemote(d); else showToast(d.message, true);
+  return d;
+}}
+async function toggleRemote() {{
+  const d = await postRemote({{ enabled: !remoteOn }});
+  if (d.ok) showToast(d.enabled ? 'Remote access is on. Turn it off when you are done.' : 'Remote access is off.');
+}}
+async function regenToken() {{
+  const d = await postRemote({{ regenerate: true }});
+  if (d.ok) showToast('New token made. The old one no longer works.');
+}}
+fetch('/api/remote-access').then(r => r.json()).then(renderRemote).catch(() => {{}});
+
+// ---- Feedback ----
+const FB_LABELS = {{ bug: 'Bug report', request: 'Feature request', question: 'Question', updates: 'Keep me updated' }};
+function fbPreview() {{
+  const t = $('fb-type').value, email = $('fb-email').value.trim();
+  $('fb-preview').textContent = 'This sends only: the type (' + FB_LABELS[t] + '), '
+    + (email ? 'your email (' + email + '), ' : 'no email, ')
+    + 'the message above, and the app version (v{APP_VERSION}), to SPEAKMAN.AI through HubSpot. Nothing else leaves this computer: no workflow data, documents or settings.';
+}}
+function fbChange() {{
+  const updates = $('fb-type').value === 'updates';
+  $('fb-email-label').textContent = updates ? 'Your email (required)' : 'Your email (optional, add one if you want a reply)';
+  $('fb-consent').style.display = updates ? 'block' : 'none';
+  fbPreview();
+}}
+async function sendFeedback() {{
+  const body = {{ type: $('fb-type').value, email: $('fb-email').value, message: $('fb-message').value }};
+  let d;
+  try {{
+    const r = await fetch('/api/feedback', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(body) }});
+    d = await r.json();
+  }} catch (e) {{
+    d = {{ ok: false, message: 'Could not send. Nothing was sent.' }};
+  }}
   showToast(d.message, !d.ok);
+  if (d.ok) {{ $('fb-message').value = ''; fbPreview(); }}
+}}
+fbChange();
+
+// ---- Shared ----
+async function copyText(id) {{
+  const text = $(id).textContent;
+  try {{
+    await navigator.clipboard.writeText(text);
+    showToast('Copied');
+  }} catch (e) {{
+    showToast('Copy failed. Select the text and copy it manually.', true);
+  }}
 }}
 
 function showToast(msg, isError=false) {{
-  const t = document.getElementById('toast');
+  const t = $('toast');
   t.textContent = msg;
   t.className = 'toast show' + (isError ? ' error' : '');
-  setTimeout(() => t.className = 'toast', 3500);
+  setTimeout(() => t.className = 'toast', isError ? 6000 : 3500);
 }}
 
 // Initialise on load
+document.querySelectorAll('.mcp-url').forEach(el => el.textContent = MCP_URL);
+document.querySelectorAll('.port').forEach(el => el.textContent = MCP_PORT);
+$('cc-cmd').textContent = 'claude mcp add --transport http --scope user {_MCP_SERVER_NAME} ' + MCP_URL;
+let startAssistant = 'claude_code';
+try {{ startAssistant = new URLSearchParams(location.search).get('assistant') || localStorage.getItem('speakmanai-assistant') || 'claude_code'; }} catch (e) {{}}
+if (!$('panel-' + startAssistant)) startAssistant = 'claude_code';
+setAssistant(startAssistant);
 setProvider(currentProvider);
-updateExecHint();
+renderRunner();
+refreshAssistantStatus();
+refreshSkillsStatus();
+refreshWorkflowsStatus();
 </script>
 </body>
 </html>"""

@@ -1,5 +1,94 @@
 # Release Notes
 
+## v1.5.0
+
+**Release:** https://github.com/speakmancip/speakmanai-local/releases/tag/v1.5.0
+
+### The short version
+
+v1.5.0 is built around one download. The exe now carries the skills, and a fresh install runs in Delegate Only mode, so a new Windows user with Claude Code installed can connect, install the skills and run a workflow without an API key. Someone with their own model API key can still switch to it on the setup page.
+
+### Headline changes
+
+**1. No API key needed: `delegate_only` mode, and a fresh install defaults to it**
+A fourth execution mode, `delegate_only`, sends the planner and every AI step to the connected assistant and pauses the model API without touching saved keys. Switching back to `auto` resumes API use. A new install with no model API set up starts in this mode. AI validators now pass automatically when no model API is available (or the mode is `delegate_only`), and the run record notes that the step was not validated. Before, a keyless run sent every validator to a model that did not exist, scored 0, and bounced the assistant through up to three redos on error text.
+
+**2. Skills ship inside the exe**
+The 17 Claude Code skills are bundled. On the setup page, **Add to Claude Code** registers the server and installs the skills in one click, without prompts. A file you edited is backed up under `~/.claude/speakmanai-cc/backups/` before it is replaced, and your own skills are never touched. The page shows whether the skills are up to date and offers the upload bundles for the Claude app and Copilot Studio.
+
+**3. Skills served over MCP (experimental)**
+Two new tools, `list_skills` and `get_skill`, let an assistant fetch a skill's text from the server when no skill is installed. A headless Claude Code run with skills disabled found and followed a skill this way unprompted, and a Copilot Studio run completed a full Solution Architecture document with no uploaded skills. The Claude app also completed a run this way. Behaviour in other clients is untested.
+
+**4. Setup page reorganised**
+The page used to open on "Choose your AI provider" and a key field. It now opens on who runs the AI steps and a "Connect your AI assistant" picker (Claude Code, Claude app, Copilot Studio, Cursor, Codex) that shows only the steps for the one you pick. The model API section is collapsed unless one is set up. The Claude Code panel shows whether the CLI was found, the install command when it was not, and a fold of help for a `claude` that is installed but not on PATH (Anthropic's Windows installer does not add it). Cursor and Codex are labelled untested.
+
+**5. Update workflows button**
+An existing database keeps the workflow prompts it was created with, because the exe only seeds a workflow that is missing. The setup page now shows an amber box with an **Update workflows** button when your stored workflows differ from the shipped ones. It replaces the shipped workflows, adds missing agents, unlinks retired ones, and writes what it replaced to `~/.speakmanai/backups/` first. It is never automatic. Your own workflows and agents are not touched.
+
+**6. Remote access is off by default**
+A public Dev Tunnel, which Copilot Studio needs, used to expose the whole app including the setup page and its API with no authentication. Now any request that is not local (Host other than `localhost`, `127.0.0.1` or `::1`, or carrying a forwarding header) gets a 403 until you turn on **Remote access** on the setup page. When it is on, only `/mcp` is reachable and it needs a token, sent as `x-api-key` or `Authorization: Bearer`. `/setup` and `/api/*` stay local only, so a tunnel can never read the token or switch the setting off. The token is made the first time you turn it on, shown with a Copy button, and can be replaced. Local use is unchanged and needs no token.
+*Limits:* the gate separates tunnels and proxies from local software. The Host header is not proof of origin, so software on the same machine can claim to be local. A static key on a public URL narrows exposure but is not a secured cloud endpoint. Do not leave a tunnel running.
+*Tested:* with a real Dev Tunnel (it keeps a non-local Host and adds forwarding headers, and the gate catches both), with Copilot Studio sending the token as an API key in `x-api-key`, with the Claude app's extension bridge (not refused), and with the Docker image bound to `0.0.0.0`. In Copilot Studio each edit of the MCP test creates a new connection, and a stale one returns 401, so pick the connection that holds the current key (see `COPILOT_STUDIO.md` in speakmanai-cc).
+
+**7. A record of who did each step**
+Each output now carries `executed_by`, `validated_by` and, for an approved human review gate, `gate_answered_by`, and `get_outputs` shows them with a short note on how to word them.
+- A step the engine ran on its own model records provider, model and mode as fact.
+- A delegated step records the name the assistant reported (a new optional `executed_by` argument on `submit_response`), the client's user agent, whether the connection was local or remote, and the execution mode. The name is stored as reported and is not checked.
+- A validator that ran records its score. A skipped one records why.
+- A human review gate is recorded as answered through the connected client. The engine cannot tell a person's answer from the assistant answering for them, so the record never says "human approved".
+The record states facts and makes no claim of independent review. A run done by one assistant from start to finish reads that way.
+The skills in the bundle tell assistants to pass `executed_by`.
+*Not in this release:* a rule that refuses a review from the same executor as the step it reviews.
+
+**8. Send feedback from the setup page**
+A closed **Send feedback** section posts a bug report, feature request, question or "Keep me updated" note to the SPEAKMAN.AI feedback form. A line under the form states exactly what is sent: the type, the message, the email if you give one, and the app version. Nothing is sent without a click, and a note without an email is accepted and kept without a contact. "Keep me updated" needs an email and shows a consent line. This is the exe's first outbound request other than to a model API.
+
+**9. A session cannot change who runs its steps halfway**
+A session's steps are fixed as handed to your assistant or run by the engine when it is planned, but the execution mode is read live. Switching the mode mid-session used to send a delegated item twice or run a validator as if still delegating. The first event now records the mode the session started in, and `submit_response` and `update_session` refuse once the mode has moved to the other side. The message names the start mode and how to switch back, and nothing is changed. Switch back and the same call works. Sessions from before this version record no mode and are not guarded.
+
+### Changes you may notice
+
+- **The SPEAKMAN.AI agent circle** is now the tray icon, the exe's icon in the taskbar and Explorer, and the setup page's browser tab icon (served at `/favicon.png`). If the image is missing, the tray falls back to the old green square.
+- **Each tool reply arrives once.** Every tool was publishing an output schema, so the MCP library sent each reply twice, as text and as structured content. That doubled what clients such as Copilot Studio counted. All 19 tools now return text only.
+- **`render_document` and `scripts/render_html.py` produce the same, fixed HTML.** Fixed: indented sub-bullets that start with italics, numbered or bulleted items nested under a bullet, bold markers inside code, `>` quotes, LaTeX such as `$\ge 99.0\%$`, and unescaped `&` in the table of contents. The build now checks that every copy of `render_html.py` in the skills matches the server's renderer and refuses to bundle if one has drifted.
+- **The `mcp` library is pinned to `>=1.27,<2`.** An unpinned Docker or run-from-source install resolved to mcp 2.x, which removed `mcp.server.fastmcp`, so the server exited at start. The exe was never affected (it bundles 1.27.0). Moving to 2.x is planned separately.
+- **Default models** are now Claude Sonnet 5.5 (fast and standard) and Opus 5.5 (advanced), and OpenAI gpt-6-luna, gpt-6.1-sol and gpt-6-astra (fast, standard, advanced). Gemini and Vertex AI defaults are unchanged. Saved configs that pin an older model keep using it until you save the setup page again. Older models stay selectable. Claude Haiku is not offered: as the fast tier it scored a validator run 0.0, so only Sonnet 5.5 and Opus 5.5, which have been run end to end, are the defaults. If you saved the setup page with Haiku on an early v1.5.0 build, choose another fast model and save again.
+- **HTML is opt-in.** The SAD and compliance report skills produce HTML only when you ask. A client that can run Python renders it locally with `scripts/render_html.py`, which the exe installs with the skills. `render_document` stays for clients with no shell, such as Copilot Studio.
+- **Smaller pauses.** In delegate mode, a pause used to repeat the full text of every output it depended on. When those total more than 20,000 characters, large outputs are now listed by agent and size, with an instruction to use your own copy or fetch it with `get_output`. One pause in a Claude app run had reached 73,540 characters, over that app's result limit. A delegated planner also no longer passes its agent list to every later agent.
+- **Find an old session by what it was about.** `list_sessions`, `poll_workflow` and `get_outputs` now return a `request_preview`, the first 200 characters of the request the session was started with, and `poll_workflow` returns the title as well. A session can sit for weeks between steps, and nobody remembers a session id. An assistant can match "the SAD about the bowling alley ecommerce tool" against the title and preview, then read the Business Context Clarifier output for the detail. Nothing times out: a session waits as long as it needs to.
+- **The exe ignores model keys it finds in your environment.** Before, a key such as `ANTHROPIC_API_KEY` set for another tool counted as a configured model API, so a first run started in `auto` and every step and validator was billed to that account. The packaged exe now uses only what you save on the setup page. Docker and run-from-source still read the environment. Start the exe with `SPEAKMANAI_USE_ENV=1` to keep the old behaviour.
+- **Other websites cannot change your settings.** A page open in your browser could post to the local setup API (`http://localhost:8000/api/...`) without any prompt, because the server read request bodies as JSON whatever their type. It could not read your token or keys, but it could switch the execution mode, update workflows or point the Ollama URL elsewhere. The engine now refuses state-changing requests to `/api/` that carry a browser `Origin` from another site (or `Sec-Fetch-Site: cross-site`). The setup page, curl, scripts and MCP clients are unaffected.
+- **The setup page shows the app version** (v1.5.0) in its footer, and feedback sends it, so a bug report says which build it came from.
+- **The setup page tabs are "Claude Code" and "Claude app".** Claude Code is for a terminal. The Claude app tab covers the app's chat, Cowork and Code tab through the extension.
+- **`sid` as well as `session_id`.** The eight tools that take a session id accept `sid` too. The Claude app's link to a local engine drops an argument named `session_id`, which broke every session tool there.
+- **Claude Code registration** now runs `claude mcp add --transport http --scope user speakmanai ...`. The old button wrote to `~/.claude/settings.json`, a file Claude Code does not read for MCP servers. The Claude Desktop and Cursor one-click buttons are gone; they shared that code and were never tested. The page shows the URL and command to copy.
+
+### Fixed
+
+- The setup page's Execution Mode dropdown never reached the engine. It wrote to `config.json`, while the engine reads a database row. Present since the first release.
+- The output cap carried over from older Haiku models (8192) truncated every fast-tier Anthropic response. Sonnet 5.5 and Opus 5.5 now have 128,000.
+- `generate_document` in `delegate_only` mode raises a clear error rather than calling a model that is paused.
+
+### If you're upgrading
+
+- **Workflows:** open the setup page and press **Update workflows** if the amber box appears. Before that, a database made by an older version keeps old prompts and review gates, and the planner may still offer the retired Technical Writer.
+- **Skills:** press the install or update button on the setup page to receive the new skill set.
+- **Tunnels and Copilot Studio:** a tunnel will now get a 403 until you turn on Remote access, and then Copilot Studio needs the token sent as an API key header. Set that up before relying on an existing tunnel.
+- **Keys in your environment:** if you relied on the exe reading a model key from an environment variable, save it on the setup page instead, or start the exe with `SPEAKMANAI_USE_ENV=1`.
+- **Models:** an install with a pinned Claude or OpenAI model keeps it. Choose the new defaults on the setup page if you want them.
+- **Docker and run-from-source** users configure the model through `.env` and are not migrated automatically. Rebuild the image (`docker-compose up --build`) to pick up the `mcp` pin.
+- **Sessions in progress:** finish a session before changing the execution mode, or switch back to the mode it started in.
+
+### Not verified at the time of writing
+
+- A first install on a clean machine with the signed build, including the SmartScreen prompt. The unsigned build passed in Windows Sandbox.
+- Mongo-backed mode for the new run record fields and the workflow update (the exe uses SQLite only).
+- The feedback section when offline or when HubSpot rejects the post.
+- Cursor and Codex, which are labelled untested on the setup page.
+- Copilot Studio cost for the full SAD run. The estimate is about 788 credits (about $15.76 at $0.02 a credit); the bill may not show for up to three weeks.
+
+---
+
 ## v1.4.1
 
 **Release:** https://github.com/speakmancip/speakmanai-local/releases/tag/v1.4.1
@@ -10,7 +99,7 @@ Since v1.2.0, `MCP_SOLUTION_ARCHITECTURE_V1` and `MCP_CAPABILITY_GENERATOR_V1` s
 
 ### Changed: no em dashes in prompt text
 
-Every agent prompt in every bundled workflow now uses plain ASCII punctuation: a spaced hyphen where an em dash was, `2-5` for ranges, `->` for arrows. The same applies to the text the server sends to models and MCP clients (the planner prompt, revision instructions, server instructions and tool descriptions). Punctuation in a prompt tends to show up in what the model writes, and em dashes are a recognizable AI-writing tell that generated documents shouldn't carry. The rule is now recorded in the repository's `CLAUDE.md`, with a check command, so later edits don't reintroduce it.
+Every agent prompt in every bundled workflow now uses plain ASCII punctuation: a spaced hyphen where an em dash was, `2-5` for ranges, `->` for arrows. The same applies to the text the server sends to models and MCP clients (the planner prompt, revision instructions, server instructions and tool descriptions). Punctuation in a prompt tends to show up in what the model writes, and em dashes are a recognizable AI-writing tell that generated documents shouldn't carry. A check for these characters is run before each release, so later edits don't reintroduce them.
 
 ### If you're upgrading
 

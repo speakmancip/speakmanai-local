@@ -2,11 +2,11 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**SPEAKMAN.AI** is a local multi-agent workflow engine exposed entirely via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Connect it to your AI assistant — Claude Code, Claude Desktop, Cursor, or Microsoft Copilot Studio — and run sophisticated multi-step AI pipelines directly from your tools, against your own LLM provider, on your own machine.
+**SPEAKMAN.AI** is a local multi-agent workflow engine exposed entirely via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Connect it to your AI assistant — Claude Code, the Claude app, Cursor, or Microsoft Copilot Studio — and run sophisticated multi-step AI pipelines directly from your tools, against your own LLM provider, on your own machine.
 
 Built-in workflows cover the whole idea-to-architecture arc — **Sizing**, **Solution Architecture**, **Requirements Engineering**, **UX Design** — plus a **Workflow Builder** for creating your own pipelines. Every workflow is a coordinated chain of AI agents that collaborate, validate each other's outputs, and (where the task calls for it) pause for a real human review before continuing.
 
-**Latest release: [v1.4.1](https://github.com/speakmancip/speakmanai-local/releases/tag/v1.4.1)**: fixes garbled punctuation in two bundled workflows and removes em dashes from all prompt text. Builds on [v1.4.0](RELEASE_NOTES.md#v140), which moved the Gemini/Vertex defaults to the 3.x line ahead of Google retiring Gemini 2.x. See [release notes](RELEASE_NOTES.md#v141).
+**Latest release: [v1.5.0](https://github.com/speakmancip/speakmanai-local/releases/tag/v1.5.0)**: one download with the skills included, and a fresh install runs through your own assistant with no API key. Adds a Remote access gate and token, a record of who did each step, and a mode guard for running sessions. See [release notes](RELEASE_NOTES.md#v150). Builds on [v1.4.1](RELEASE_NOTES.md#v141), which fixed garbled punctuation in two bundled workflows.
 
 ---
 
@@ -29,11 +29,17 @@ No Python, no Docker, no terminal required.
 
 1. Download `SpeakmanAI.exe` from the [releases page](https://github.com/speakmancip/speakmanai-local/releases)
 2. Run it — a system tray icon appears and your browser opens automatically
-3. Choose your AI provider and enter your API key on the setup page
-4. Click **Add to Claude Code** (or Claude Desktop / Cursor) to connect your assistant
+3. Click **Connect Claude Code** on the setup page. No API key is needed: your assistant runs the AI steps (other assistants: pick yours on the same page for its steps, see [SETUP.md](SETUP.md))
+4. Optional: add your own model API on the same page to run steps in the background
 5. Ask your assistant: *"List the available SPEAKMAN.AI workflows and start a session"*
 
 Config is saved to `~/.speakmanai/config.json`. Logs at `~/.speakmanai/speakmanai.log`.
+
+**Upgrading an existing install:** open the setup page and press **Update workflows** if the amber box appears (your stored workflows differ from the shipped ones; the old copies are backed up first), and press the skills update button. The packaged exe reads model keys only from the setup page, not from environment variables (start it with `SPEAKMANAI_USE_ENV=1` to keep the old behaviour). See [SETUP.md](SETUP.md).
+
+**Using a tunnel (Copilot Studio):** the setup page's **Remote access** section is off by default, so a public tunnel is refused until you turn it on, and then `/mcp` needs the token it shows. `/setup` stays local only. Do not leave a tunnel running. See [SETUP.md](SETUP.md#remote-access-and-tunnels).
+
+**Feedback:** a closed **Send feedback** section on the setup page sends a bug report, request or question to SPEAKMAN.AI. It shows exactly what it sends and sends nothing until you press Send.
 
 ---
 
@@ -94,8 +100,8 @@ The delegate-first sibling of the workflow builder above. Produces workflows whe
 | Provider | Fast | Standard | Advanced |
 |---|---|---|---|
 | **Gemini** (recommended) | `gemini-3.5-flash-lite` | `gemini-3.8-flash` | `gemini-3.1-pro-preview` |
-| **Claude** | `claude-haiku-4-5` | `claude-sonnet-4-6` | `claude-opus-4-8` |
-| **OpenAI** | `gpt-4o-mini` | `gpt-4o` | `gpt-4o` |
+| **Claude** | `claude-sonnet-5-5` | `claude-sonnet-5-5` | `claude-opus-5-5` |
+| **OpenAI** | `gpt-6-luna` | `gpt-6.1-sol` | `gpt-6-astra` |
 | **Ollama** | Local inference — 14B+ model strongly recommended (see below) | | |
 
 All workflow agents use abstract model tiers (`fast`, `standard`, `advanced`) — no workflow files need editing when you switch providers. Changes via the setup page take effect immediately.
@@ -160,8 +166,9 @@ Workflows are defined in JSON — a workflow definition and an array of agents. 
 | **Auto** | Each agent runs as configured — background LLM or delegate as defined |
 | **Force Delegate** | Every AI step is handed to your connected assistant regardless of agent config |
 | **Force Background** | Every step runs against the configured LLM — delegation overridden |
+| **Delegate Only (API paused)** | Like Force Delegate, and the model API is paused: no model calls, no failures when you are out of credits, and your keys and provider settings are kept. AI validators are skipped and marked `validation_skipped`. `generate_document` is unavailable. Switch back to Auto to resume |
 
-Switch modes at any time via the setup page or: *"Set execution mode to force_delegate"*
+Switch modes at any time via the setup page or: *"Set execution mode to delegate_only"*
 
 ---
 
@@ -173,12 +180,14 @@ Switch modes at any time via the setup page or: *"Set execution mode to force_de
 | `start_session` | Start a new workflow pipeline — returns a session_id immediately |
 | `poll_workflow` | Check status of a running session |
 | `submit_response` | Provide input when a workflow reaches AWAITING_INPUT |
-| `get_outputs` | Get the manifest of completed agent outputs |
+| `get_outputs` | Get the manifest of completed agent outputs, with the run record for each (`executed_by`, `validated_by`, `gate_answered_by`) |
 | `get_output` | Fetch the full content of a specific agent's output |
-| `list_sessions` | List recent sessions — use to recover a lost session_id |
+| `list_sessions` | List recent sessions with a title and a `request_preview` (the start of the original request) — use to recover a lost session_id, even weeks later |
 | `cancel_session` | Cancel a stuck or failed session |
 | `update_session` | Revise one agent's output in a completed session and cascade the change through everything downstream — no re-run from scratch |
-| `set_execution_mode` | Switch between auto / force_delegate / force_background |
+| `set_execution_mode` | Switch between auto / force_delegate / force_background / delegate_only. A session started on one side (assistant or model API) cannot be continued after the mode moves to the other |
+| `list_skills` | List the skills the server can deliver (experimental, for assistants without installed skills) |
+| `get_skill` | Get one skill's full instructions with its bundled files inlined |
 | `import_architecture_plan` | Import a workflow JSON into the database |
 | `import_workflow` | Import a workflow definition only |
 | `import_agent` | Import or update a single agent |
@@ -206,6 +215,8 @@ speakmanai-local/
     ├── engine.py                        # Workflow execution engine
     ├── database.py                      # Database router (SQLite / MongoDB)
     ├── database_sqlite.py               # SQLite async adapter
+    ├── skills_installer.py              # Installs the bundled skills into Claude Code
+    ├── workflows_sync.py                # Update workflows: brings a database up to the shipped workflows
     ├── requirements.txt                 # Docker/server dependencies
     └── requirements-desktop.txt        # Desktop exe dependencies
 ```
@@ -220,10 +231,15 @@ source venv-desktop/Scripts/activate    # Git Bash / Mac/Linux
 # venv-desktop\Scripts\activate.bat    # Windows CMD
 
 pip install -r orchestration/mcp-server/requirements-desktop.txt
+python tools/bundle_skills.py           # stage the skills from a speakmanai-cc checkout
 python -m PyInstaller speakmanai.spec
 ```
 
+Docker and run-from-source installs use `requirements.txt`, which pins `mcp[cli]>=1.27,<2`.
+
 Output: `dist/SpeakmanAI.exe`
+
+`tools/bundle_skills.py` reads a checkout of [speakmanai-cc](https://github.com/speakmancip/speakmanai-cc) (`--cc-dir`, or `SPEAKMANAI_CC_DIR`, default a sibling folder) and stages the skills into `build/skills_bundle`. It first runs `tools/sync_render_html.py`, which refuses to bundle if any copy of `render_html.py` in that checkout differs from `document_renderer.py` (`--write` refreshes them; commit the result in speakmanai-cc on a branch). The exe then carries them: **Add to Claude Code** on the setup page installs them, and the page offers the upload bundles for other assistants. Skip the step and the exe still builds, without skills. See [SETUP.md](SETUP.md).
 
 ---
 
@@ -243,7 +259,7 @@ curl http://localhost:8000/health
 | Skill | Command | What it does |
 |---|---|---|
 | Project Brief | `/generate-project-brief` | Coaches a raw idea into a structured brief before it ever needs a SPEAKMAN.AI session |
-| Solution Architecture | `/generate-sad` | Runs the architecture workflow and renders a branded HTML + PDF document locally |
+| Solution Architecture | `/generate-sad` | Runs the architecture workflow and writes the document as Markdown, with a branded HTML version only if you ask for it |
 | Requirements Engineer | `/generate-requirements` | Runs the requirements workflow and saves implementation-ready coding contracts |
 | UX & Interface Design | `/generate-ux-design` | Runs the UX design workflow and saves the screen inventory, flow diagrams, and mockups |
 | Compliance Report | `/generate-compliance-report` | Runs a compliance workflow and produces a risk assessment report |

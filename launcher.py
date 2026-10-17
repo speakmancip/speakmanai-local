@@ -56,6 +56,29 @@ def _migrate_retired_models(cfg: dict) -> bool:
     return changed
 
 
+# Model settings the engine reads from the environment. A packaged exe ignores any of these it
+# inherits: someone who set ANTHROPIC_API_KEY for Claude Code would otherwise have every step and
+# validator billed to that account without ever entering a key here. Only config.json counts.
+# Docker and run-from-source keep using the environment. SPEAKMANAI_USE_ENV=1 keeps it in the exe.
+_MODEL_ENV_VARS = (
+    "LLM_PROVIDER", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GCP_PROJECT_ID",
+    "GCP_REGION", "DEFAULT_MODEL", "STANDARD_MODEL", "ADVANCED_MODEL", "OLLAMA_BASE_URL",
+)
+
+
+def ignore_inherited_model_env(frozen: bool = None) -> list:
+    """Drop inherited model settings from the environment in a packaged exe. Returns the names dropped."""
+    if frozen is None:
+        frozen = bool(getattr(sys, "frozen", False))
+    if not frozen or os.environ.get("SPEAKMANAI_USE_ENV", "").lower() in ("1", "true", "yes"):
+        return []
+    dropped = [k for k in _MODEL_ENV_VARS if os.environ.pop(k, None) is not None]
+    if dropped:
+        log.info("Ignoring model settings found in the environment (%s). Set them on the setup page, "
+                 "or start with SPEAKMANAI_USE_ENV=1 to use them.", ", ".join(dropped))
+    return dropped
+
+
 def load_config_to_env() -> None:
     """Read ~/.speakmanai/config.json and inject values into the process environment."""
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -146,16 +169,26 @@ def open_browser() -> None:
     log.error("Server did not start in time.")
 
 
+def _tray_image(Image, ImageDraw):
+    """The SPEAKMAN.AI agent circle from assets/, or a plain green square if it is missing."""
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+    try:
+        with Image.open(base / "assets" / "speakmanai_agent_circle.png") as src:
+            return src.convert("RGBA").resize((64, 64), Image.LANCZOS)
+    except Exception as e:
+        log.info(f"Tray icon image not loaded ({e}); using the plain icon.")
+        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        ImageDraw.Draw(img).rounded_rectangle([4, 4, 60, 60], radius=12, fill="#00ff7f")
+        return img
+
+
 def run_tray() -> None:
     """Show a system tray icon with Open / Quit menu items."""
     try:
         import pystray
         from PIL import Image, ImageDraw
 
-        # Simple icon: dark background, green rounded square
-        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
-        d.rounded_rectangle([4, 4, 60, 60], radius=12, fill="#00ff7f")
+        img = _tray_image(Image, ImageDraw)
 
         def on_open(_icon, _item):
             webbrowser.open(f"http://127.0.0.1:{PORT}/setup")
@@ -185,6 +218,7 @@ def run_tray() -> None:
 
 
 def main() -> None:
+    ignore_inherited_model_env()
     load_config_to_env()
 
     server_thread = threading.Thread(target=start_server, daemon=True)

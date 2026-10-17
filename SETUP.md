@@ -40,9 +40,9 @@ RAW_EVENTS_DB_NAME=speakmanai_db
 
 LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
-DEFAULT_MODEL=claude-haiku-4-5
-STANDARD_MODEL=claude-sonnet-4-6
-ADVANCED_MODEL=claude-opus-4-8
+DEFAULT_MODEL=claude-sonnet-5-5
+STANDARD_MODEL=claude-sonnet-5-5
+ADVANCED_MODEL=claude-opus-5-5
 ```
 
 **OpenAI**
@@ -53,9 +53,9 @@ RAW_EVENTS_DB_NAME=speakmanai_db
 
 LLM_PROVIDER=openai
 OPENAI_API_KEY=sk-...
-DEFAULT_MODEL=gpt-4o-mini
-STANDARD_MODEL=gpt-4o
-ADVANCED_MODEL=gpt-4o
+DEFAULT_MODEL=gpt-6-luna
+STANDARD_MODEL=gpt-6.1-sol
+ADVANCED_MODEL=gpt-6-astra
 ```
 
 **Ollama**
@@ -111,19 +111,21 @@ import_architecture_plan('<contents of WorkflowsAndAgents/CLAUDE_WORKFLOW_CREATO
 
 ### 4. Connect your AI assistant
 
-Add to `~/.claude/settings.json` (Claude Code):
+**Claude Code.** Register the server once for all your projects:
 
-```json
-{
-  "mcpServers": {
-    "speakmanai": {
-      "url": "http://localhost:8000/mcp"
-    }
-  }
-}
+```bash
+claude mcp add --transport http --scope user speakmanai http://localhost:8000/mcp
 ```
 
-Restart your AI assistant after saving. The setup page at `http://localhost:8000/setup` provides one-click config buttons for Claude Desktop, Claude Code, and Cursor.
+The setup page at `http://localhost:8000/setup` has a **Connect Claude Code** button that runs this for you, and shows the command to copy if it cannot find the `claude` CLI. Restart Claude Code afterwards, then check with `claude mcp list`.
+
+> Earlier versions wrote the server into `~/.claude/settings.json`. Claude Code does not read MCP servers from that file, so that entry never took effect. It keeps them in `~/.claude.json`, which the command above updates.
+
+**Other assistants.** Setup is manual. Add the MCP server URL `http://localhost:8000/mcp` in the assistant's own settings (the setup page shows it with a copy button).
+
+- The Claude app (chat side): the app's Add custom connector screen cannot take a local address, so use the small extension (`speakmanai-local.mcpb`, downloadable from the Claude app tab of the setup page): install it under Settings, Extensions, Advanced settings, Install Extension, and switch it on. It needs no Node and no admin rights, and the app shows a red unsigned warning. The alternative is the app's config file through a bridge program, which needs Node installed for your user. Cowork and the chat are one screen. The skills bundle upload is optional: the app can fetch the skill from the server. See [CLAUDE_APP.md](https://github.com/speakmancip/speakmanai-cc/blob/master/desktop-skills/CLAUDE_APP.md). Claude Code inside the Claude app (its Code tab) is simpler: install the Claude Code CLI, connect it from the setup page, and restart the app.
+- Microsoft Copilot Studio: it cannot reach `localhost`, so use a public tunnel URL. A tunnel is refused until you turn on Remote access on the setup page, and then needs the token it shows (see [Remote access and tunnels](#remote-access-and-tunnels)). See `desktop-skills/COPILOT_STUDIO.md` in the `speakmanai-cc` repo.
+- Cursor and Codex: not tested.
 
 ---
 
@@ -198,16 +200,79 @@ source venv-desktop/Scripts/activate       # Git Bash
 
 pip install -r orchestration/mcp-server/requirements-desktop.txt
 
+python tools/bundle_skills.py              # stage the skills (see below)
 python -m PyInstaller speakmanai.spec
 ```
 
-Output: `dist/SpeakmanAI.exe`
+Output: `dist/SpeakmanAI.exe`. To build into a named folder: `--distpath dist\<name> --workpath build\pyi-<name>`.
+
+The agent circle icon comes from `assets/` (`speakmanai_agent_circle.png` for the tray, `speakmanai.ico` for the exe, `favicon.png` for the setup page's browser tab). `speakmanai.spec` bundles them. A new module that `server.py` imports must also be added to `speakmanai.spec` (`datas` and `excludes`), because the server is loaded by path.
+
+### Bundled skills
+
+The exe carries the SPEAKMAN.AI skills from the [speakmanai-cc](https://github.com/speakmancip/speakmanai-cc) repo, so a user does not need to clone that repo or run its install script.
+
+**At build time**, `tools/bundle_skills.py` reads a speakmanai-cc checkout and stages `build/skills_bundle`:
+
+- the Claude Code skills (`.claude/skills`) with their synthesis `prompts`
+- the upload bundles for other assistants, built by that repo's `desktop-skills/build.ps1` (needs PowerShell; pass `--skip-zips` to leave them out)
+- `manifest.json` with the skills version (plugin version plus the checkout's commit) and a hash per file
+
+Point it at the checkout with `--cc-dir PATH` or `SPEAKMANAI_CC_DIR`. By default it looks for a `speakmanai-cc` folder beside this repo's grandparent. Build from a clean checkout: uncommitted changes mark the version `.dirty`. `speakmanai.spec` includes the bundle when it exists and warns when it does not.
+
+**At run time**, **Connect Claude Code** on the setup page registers the MCP server and installs the skills. It copies them to `~/.claude/skills` and the assets to `~/.claude/speakmanai-cc`, without prompting:
+
+- a file you have not changed since the last install is replaced
+- a file that differs from the last install (you edited it, or it came from `install.ps1`) is copied to `~/.claude/speakmanai-cc/backups/<timestamp>/` first, then replaced
+- your own skills, and extra files you added inside a skill folder, are left alone
+
+`~/.claude/speakmanai-cc/installed.json` records the installed version. The page shows whether the skills are installed, up to date, or have an update, and links the upload bundles for the Claude app and Copilot Studio. The speakmanai-cc `install.ps1` and `install.sh` still work for installing the skills without the exe.
 
 ### First run
 
 1. Launch `SpeakmanAI.exe` — a tray icon appears and a browser window opens automatically
-2. Choose your AI provider and enter your API key in the setup page
-3. Connect your AI assistant from the setup page
+2. Click **Connect Claude Code** on the setup page (or pick another assistant for its manual steps)
+3. Optional: add your own model API under **Model API**
+
+A new install with no model API starts in Delegate Only mode, so workflows run through your connected assistant with no key.
+
+**Model keys in your environment are ignored by the exe.** A key such as `ANTHROPIC_API_KEY` set for another tool does not count as a model API, so it is never billed without you entering it on the setup page. Only `~/.speakmanai/config.json` counts. Start the exe with `SPEAKMANAI_USE_ENV=1` to use environment settings instead. Docker and run-from-source read the environment and `.env` as before.
+
+### Upgrading an existing install
+
+- **Workflows.** The exe only imports a bundled workflow that is missing from your database, so an older database keeps the prompts, review gates and agent lists it was created with. The setup page shows an amber box with an **Update workflows** button when yours differ. It replaces the shipped workflows with this version's, adds missing agents, unlinks retired ones, and first writes what it replaced to `~/.speakmanai/backups/workflows-<timestamp>.json`. Your own workflows and agents are not touched. To keep an edited shipped workflow, copy it to a new workflow ID first. It is a button, never automatic.
+- **Skills.** The Skills block on the setup page shows when an update is available. A file you edited is backed up under `~/.claude/speakmanai-cc/backups/` before it is replaced.
+- **Models.** A saved config that pins an older Claude or OpenAI model keeps it. Save the setup page again to move to the new defaults.
+
+### Remote access and tunnels
+
+Copilot Studio cannot reach `localhost`, so it needs a public tunnel URL. The engine treats any request that is not local (a Host other than `localhost`, `127.0.0.1` or `::1`, or a forwarding header such as `X-Forwarded-For`) as remote:
+
+- **Remote access off (default):** a remote request gets a 403 and nothing else happens. A tunnel does not work.
+- **Remote access on:** only `/mcp` is reachable remotely, and it needs the token on every request, sent as the header `x-api-key` or as `Authorization: Bearer <token>` (401 otherwise).
+- **Always local only:** `/setup` and `/api/*` never accept a remote request, so a tunnel cannot read the token, change settings or turn Remote access off.
+
+Turn it on under **Remote access** (an Advanced fold) on the setup page. The token is created the first time and shown with a Copy button; **Make a new token** replaces it, which stops anything using the old one. Local use needs no token, and **Connect Claude Code** registers the plain `http://localhost:<port>/mcp` URL.
+
+Separately, the local `/api` refuses state-changing requests that a web page on another site sends through your browser (a request with an `Origin` from another site, or `Sec-Fetch-Site: cross-site`). The setup page, curl and scripts send neither and are unaffected. `/mcp` is not covered by this check, because MCP clients are not browsers.
+
+Limits to know about: the Host header is not proof of origin, so software on the same machine can claim to be local. The gate separates tunnels and proxies from local software, and a static key on a public URL narrows exposure but is not a secured cloud endpoint. Turn Remote access off and stop the tunnel when you are done. Tested with a real Dev Tunnel and with Copilot Studio sending the token as an API key header.
+
+The Docker image listens on `0.0.0.0`, so the same gate applies there: a request through the published port with a non-local Host is refused until Remote access is on.
+
+### The run record
+
+Each output records who produced it. `get_outputs` shows three fields per output:
+
+- `executed_by`: for a step the engine ran on its own model, the provider, model and execution mode (recorded by the engine). For a delegated step, the name the assistant reported through the optional `executed_by` argument of `submit_response`, the client's user agent, whether the connection was local or remote, and the mode. The reported name is stored as given and is not checked.
+- `validated_by`: the validator and its score, or why it was skipped (model API paused or not set up).
+- `gate_answered_by`: for an approved human review gate, that it was answered through the connected client. The engine cannot tell a person's answer from the assistant answering for them, so it never records "human approved".
+
+The record states facts and makes no claim of independent review: a run done by one assistant from start to finish reads that way.
+
+### Finding an old session
+
+A session can wait for weeks. `list_sessions` returns each session's title and a `request_preview` (the first 200 characters of the request it was started with), and `poll_workflow` and `get_outputs` return the same, so an assistant can find "the SAD about the bowling alley ecommerce tool" without a session ID. `get_output` on the Business Context Clarifier then gives the goal and scope. Nothing times out.
 
 Config is stored at `~/.speakmanai/config.json`. The SQLite database is at `~/.speakmanai/speakmanai.db`. Logs are at `~/.speakmanai/speakmanai.log`.
 
@@ -218,10 +283,16 @@ Config is stored at `~/.speakmanai/config.json`. The SQLite database is at `~/.s
 All modes expose a setup UI at `http://localhost:8000/setup`.
 
 Use it to:
-- Pick your AI provider (Gemini, Claude, OpenAI, Vertex AI, Ollama)
+- Choose who runs the AI steps: your connected assistant (no API key) or your own model API. The choice appears once a model API is set up; before that your assistant runs them and there is nothing to choose. Adding a first model API switches to it
+- Connect your assistant: pick it from the list to see its steps. Claude Code is one click; the Claude app, Copilot Studio, Cursor and Codex are manual
+- Pick your AI provider (Gemini, Claude, OpenAI, Vertex AI, Ollama), under **Model API**, which is optional
 - Enter your API key (or GCP project/region for Vertex AI, which uses Application Default Credentials instead) and choose fast / standard / advanced models
-- Set the execution mode
-- Connect your AI assistant (Claude Desktop, Claude Code, Cursor)
+- Set the execution mode directly, under **Advanced** (shown once a model API is set up)
+- Update an older database to this version's workflows (**Update workflows**, shown only when something differs)
+- Turn **Remote access** on or off and copy the token, under **Advanced**
+- Send feedback to SPEAKMAN.AI, under **Advanced**. It lists exactly what it sends (the type, your optional email, your message and the app version) and sends nothing until you press Send
+
+The page footer shows the app version. Mention it in a bug report.
 
 ### Execution Modes
 
@@ -230,6 +301,9 @@ Use it to:
 | **Auto** | Each agent runs with its own configured model tier. The provider and models chosen in setup determine what `fast` / `standard` / `advanced` resolve to. |
 | **Force Delegate** | Every AI step pauses and is handed to your connected AI assistant (e.g. Claude Code) to execute instead of calling the LLM API. Useful when you have no API credits. |
 | **Force Background** | Any steps configured to delegate to an AI assistant are overridden and run automatically using the provider above — fully hands-off. |
+| **Delegate Only (API paused)** | Like Force Delegate, and the model API is paused. Nothing calls the provider, so there are no failures when you are out of credits, and your keys and provider settings are kept untouched. Switch back to Auto to resume. |
+
+A session records the mode it started in. If you change the mode to the other side (assistant to model API, or back) while a session is open, `submit_response` and `update_session` on that session refuse with a message naming the start mode, and change nothing. Switch back to continue it, or start a new session. Sessions created by earlier versions record no mode and are not guarded.
 
 ---
 
@@ -238,8 +312,8 @@ Use it to:
 | Provider | `LLM_PROVIDER` | Key variable | Fast (`DEFAULT_MODEL`) | Standard (`STANDARD_MODEL`) | Advanced (`ADVANCED_MODEL`) |
 |---|---|---|---|---|---|
 | Gemini | `gemini` | `GEMINI_API_KEY` | `gemini-3.5-flash-lite` | `gemini-3.8-flash` | `gemini-3.1-pro-preview` |
-| Claude | `anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` | `claude-sonnet-4-6` | `claude-opus-4-8` |
-| OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-4o-mini` | `gpt-4o` | `gpt-4o` |
+| Claude | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-5-5` | `claude-sonnet-5-5` | `claude-opus-5-5` |
+| OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-6-luna` | `gpt-6.1-sol` | `gpt-6-astra` |
 | Ollama | `ollama` | *(none)* | set via `DEFAULT_MODEL` | set via `STANDARD_MODEL` | set via `ADVANCED_MODEL` |
 | Vertex AI | `vertexai` | `GCP_PROJECT_ID` + `GCP_REGION` | `gemini-3.5-flash-lite` | `gemini-3.8-flash` | `gemini-3.1-pro-preview` |
 
@@ -258,7 +332,7 @@ All workflow agents use abstract tiers (`fast`, `standard`, `advanced`) rather t
 `DEFAULT_MODEL`, `STANDARD_MODEL`, and `ADVANCED_MODEL` accept any model name your provider account has access to — you are not limited to the table above. Newer, more capable models are also supported and selectable on the setup page for Gemini and Claude:
 
 - **Gemini 3 family** — e.g. `gemini-3.1-flash-lite` (GA as of May 2026 — note: no `-preview` suffix, that alias has been retired), `gemini-3-flash-preview`, `gemini-3.1-pro-preview` (Vertex AI: global location only)
-- **Claude 5 family** — `claude-sonnet-5`, `claude-fable-5`
+- **Earlier Claude and OpenAI models** — `claude-sonnet-4-6`, `claude-opus-4-8`, `claude-sonnet-5`, `claude-fable-5`, `gpt-4o`, `gpt-4o-mini` stay selectable on the setup page for Claude and OpenAI
 
 These generally improve output quality but cost more per call than the defaults above — use them for `STANDARD_MODEL` / `ADVANCED_MODEL` on workflows where the extra quality is worth the spend. Preview model names change as Google/Anthropic promote them to general availability — if you get a 404/"model not found" on one of these, check whether the `-preview` suffix has been dropped.
 
@@ -315,7 +389,7 @@ Ensure you started with `--profile mongo`. Without it the MongoDB container does
 The `extra_hosts: host.docker.internal:host-gateway` entry in `docker-compose.yml` handles this on Linux. On Mac and Windows, `host.docker.internal` resolves automatically.
 
 **No API credits / want to test without LLM costs**
-Use Force Delegate mode — your connected AI assistant (Claude Code) executes all AI steps instead of calling the LLM API. Set it in the setup page or call `set_execution_mode("force_delegate")` via MCP.
+Use Delegate Only mode — your connected AI assistant (Claude Code) executes all AI steps and the model API is paused, so your keys stay saved but are never used. Set it in the setup page or call `set_execution_mode("delegate_only")` via MCP, and switch back to Auto when you have credits again. Validators are not delegated: while the API is paused (or when no model API is configured at all) they auto-pass, and the run record carries a `validation_skipped` marker for each skipped step. `generate_document` needs the model and is unavailable in this mode. Plain Force Delegate also hands AI steps to your assistant, but it still calls a configured model for validators.
 
 **Desktop exe logs**
 If the exe starts but something isn't working, check `~/.speakmanai/speakmanai.log` for details.

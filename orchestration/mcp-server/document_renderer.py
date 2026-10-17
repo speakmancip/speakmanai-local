@@ -203,14 +203,112 @@ def _preprocess(text: str) -> str:
 # INLINE RENDERER
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _esc(text: str) -> str:
+    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+
+_LATEX_SYMBOLS = {
+    r'\ge': '&ge;', r'\geq': '&ge;', r'\le': '&le;', r'\leq': '&le;', r'\neq': '&ne;',
+    r'\approx': '&asymp;', r'\times': '&times;', r'\pm': '&plusmn;', r'\rightarrow': '&rarr;',
+    r'\leftarrow': '&larr;', r'\to': '&rarr;', r'\%': '%', r'\$': '$', r'\_': '_',
+}
+
+
+def _latex_to_text(match) -> str:
+    """Turn a simple inline LaTeX span ($\\ge 99\\%$) into plain HTML. Only spans that contain a
+    backslash are touched, so prices such as $18 and $25 are left alone."""
+    body = match.group(1)
+    body = re.sub(r'\\text\{([^}]*)\}', r'\1', body)
+    for cmd in sorted(_LATEX_SYMBOLS, key=len, reverse=True):
+        body = re.sub(re.escape(cmd) + (r'(?![A-Za-z])' if cmd[1:].isalpha() else ''), _LATEX_SYMBOLS[cmd], body)
+    return re.sub(r'\s+', ' ', body).strip()
+
+
 def inline(text: str) -> str:
-    """Convert inline Markdown to HTML."""
-    text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-    text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
-    text = re.sub(r'\*(.+?)\*', r'<em>\1</em>', text)
-    text = re.sub(r'`(.+?)`', r'<code>\1</code>', text)
+    """Convert inline Markdown to HTML. Code spans are set aside first so that asterisks and
+    underscores inside them are never read as emphasis."""
+    spans = []
+
+    def _stash(m):
+        spans.append(f'<code>{_esc(m.group(1))}</code>')
+        return f'\x00{len(spans) - 1}\x00'
+
+    text = re.sub(r'`([^`]+)`', _stash, text)
+    text = _esc(text)
+    text = re.sub(r'\$([^$\n]*\\[^$\n]*)\$', _latex_to_text, text)
+    text = re.sub(r'\*\*([^*\s](?:[^*]*?[^*\s])?)\*\*', r'<strong>\1</strong>', text)
+    text = re.sub(r'(?<![*\w])\*([^*\s](?:[^*]*?[^*\s])?)\*(?![*\w])', r'<em>\1</em>', text)
     text = re.sub(r'\[(.+?)\]\((.+?)\)', r'<a href="\2">\1</a>', text)
-    return text
+    return re.sub(r'\x00(\d+)\x00', lambda m: spans[int(m.group(1))], text)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LIST PARSER (nested bullets and numbers, by indentation)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_LIST_RE = re.compile(r'^(\s*)([-*+]|\d+\.)\s+(.*)$')
+
+
+def _collect_list(lines: list, i: int):
+    """Read consecutive list lines (any indent) plus indented continuation lines."""
+    items = []
+    while i < len(lines):
+        line = lines[i]
+        m = _LIST_RE.match(line)
+        if m:
+            marker = m.group(2)
+            ordered = marker[0].isdigit()
+            items.append({
+                'indent': len(m.group(1).expandtabs(4)),
+                'ordered': ordered,
+                'num': int(marker[:-1]) if ordered else None,
+                'text': m.group(3).strip(),
+                'extra': [],
+            })
+            i += 1
+            continue
+        stripped = line.strip()
+        if (items and stripped and line[:2] == '  ' and not stripped.startswith('```')
+                and not stripped.startswith('|')):
+            items[-1]['extra'].append(stripped)
+            i += 1
+            continue
+        break
+    return items, i
+
+
+def _build_list(items: list, idx: int, indent: int):
+    first = items[idx]
+    tag = 'ol' if first['ordered'] else 'ul'
+    start = f' start="{first["num"]}"' if first['ordered'] and first['num'] not in (None, 1) else ''
+    pad = '    ' + '  ' * (indent // 2)
+    out = [f'{pad}<{tag}{start}>\n']
+    while idx < len(items):
+        it = items[idx]
+        if it['indent'] < indent or (it['indent'] == indent and it['ordered'] != first['ordered']):
+            break
+        plain = [e for e in it['extra'] if not e.startswith('>')]
+        quotes = [e.lstrip('> ').strip() for e in it['extra'] if e.startswith('>')]
+        body = inline(' '.join([it['text']] + plain))
+        if quotes:
+            body += '<blockquote>' + ' '.join(inline(q) for q in quotes) + '</blockquote>'
+        idx += 1
+        child = ''
+        if idx < len(items) and items[idx]['indent'] > it['indent']:
+            child, idx = _build_list(items, idx, items[idx]['indent'])
+        out.append(f'{pad}  <li>{body}{chr(10) + child if child else ""}</li>\n')
+    out.append(f'{pad}</{tag}>\n')
+    return ''.join(out), idx
+
+
+def parse_list(lines: list, i: int):
+    items, i = _collect_list(lines, i)
+    html = []
+    idx = 0
+    while idx < len(items):
+        block, idx = _build_list(items, idx, items[idx]['indent'])
+        html.append(block)
+    return ''.join(html), i
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -309,30 +407,17 @@ def md_to_html(md_text: str):
             output.append(parse_table(table_rows))
             continue
 
-        # Unordered list
-        if re.match(r'^[-*+]\s', line):
-            output.append('    <ul>\n')
-            while i < len(lines) and re.match(r'^[-*+]\s', lines[i]):
-                output.append(f'      <li>{inline(lines[i][2:].strip())}</li>\n')
-                i += 1
-            output.append('    </ul>\n')
+        # Bullet or numbered list, nested by indentation
+        if _LIST_RE.match(line):
+            block, i = parse_list(lines, i)
+            output.append(block)
             continue
 
-        # Ordered list
-        if re.match(r'^\d+\.\s', line):
-            output.append('    <ol>\n')
-            while i < len(lines) and re.match(r'^\d+\.\s', lines[i]):
-                item_text = re.sub(r'^\d+\.\s', '', lines[i])
-                output.append(f'      <li>{inline(item_text)}</li>\n')
-                i += 1
-            output.append('    </ol>\n')
-            continue
-
-        # Blockquote
-        if line.startswith('> '):
+        # Blockquote (up to three spaces of indent allowed)
+        if re.match(r'^\s{0,3}>\s?', line):
             bq_lines = []
-            while i < len(lines) and lines[i].startswith('> '):
-                bq_lines.append(inline(lines[i][2:]))
+            while i < len(lines) and re.match(r'^\s{0,3}>\s?', lines[i]):
+                bq_lines.append(inline(re.sub(r'^\s{0,3}>\s?', '', lines[i])))
                 i += 1
             output.append(f'    <blockquote>{" ".join(bq_lines)}</blockquote>\n')
             continue
@@ -355,7 +440,7 @@ def md_to_html(md_text: str):
 
 def build_html(doc_title, subtitle, body_html, toc_sections, page_title):
     toc_items = '\n'.join(
-        f'      <li><a href="#{sid}">{label}</a></li>'
+        f'      <li><a href="#{sid}">{inline(label)}</a></li>'
         for sid, label in toc_sections
     )
     return HTML_TEMPLATE.format(
