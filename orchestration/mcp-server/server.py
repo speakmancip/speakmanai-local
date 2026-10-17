@@ -43,6 +43,7 @@ from engine import (
     render_document_local,
     resolve_agent_step_index,
     transition_completed_or_cancelled_to_draft,
+    mode_family,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -268,6 +269,27 @@ def _caller_descriptor(mcp_ctx, self_reported: str) -> dict:
 # ─────────────────────────────────────────────
 # Tool 3: submit_response  (generic HITL resume)
 # ─────────────────────────────────────────────
+async def _refuse_if_mode_changed(doc: dict, session_id: str) -> None:
+    """A session is planned for the assistant or for the model API when it starts: its steps are
+    fixed as delegated pauses or as engine steps, and its checks run the same way. Continuing it
+    after the execution mode moved to the other side sends the same delegated item again and
+    runs the validators against the wrong side. Refuse before anything changes. A session from
+    before the mode was recorded has nothing to compare and is left alone."""
+    events = doc.get("events") or []
+    started = ((events[0].get("attributes") or {}).get("execution_mode") if events else None)
+    if not started:
+        return
+    now = await _get_execution_mode()
+    if mode_family(started) != mode_family(now):
+        raise RuntimeError(
+            f"Session {session_id} was started in execution mode {started}, but the mode is now {now}. "
+            "A session cannot move between your assistant running the AI steps and the model API running them, "
+            "because the steps it already planned would run the wrong way. Nothing was changed. "
+            f"Switch the mode back (set_execution_mode(\"{started}\") or the setup page) to continue this session, "
+            "or start a new session in the current mode."
+        )
+
+
 @mcp.tool(name="submit_response", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
 async def submit_response(
     response: str,
@@ -313,6 +335,8 @@ async def submit_response(
     doc = await db[COLLECTION].find_one({"session_id": session_id})
     if not doc:
         raise RuntimeError(f"Session {session_id} not found.")
+
+    await _refuse_if_mode_changed(doc, session_id)
 
     mcp_input_config = await _get_mcp_pause_config(doc)
     if not mcp_input_config:
@@ -1156,6 +1180,7 @@ async def update_session(agent_id: str, update_content: str, session_id: str = "
     events = doc.get("events") or []
     if not events:
         raise RuntimeError(f"Session {session_id} has no recorded steps to update.")
+    await _refuse_if_mode_changed(doc, session_id)
     workflow_def = events[0].get("data", {}).get("workflow_definition", {})
 
     entry_step_idx = resolve_agent_step_index(workflow_def, agent_id)

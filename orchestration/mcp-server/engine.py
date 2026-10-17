@@ -307,6 +307,12 @@ async def _call_llm(system_prompt: str, user_content: str, model_name: str, mime
 _DELEGATING_MODES = ("force_delegate", "delegate_only")
 
 
+def mode_family(mode: str) -> str:
+    """Who runs the AI steps: "assistant" (the delegating modes) or "engine" (the model API).
+    A session is planned for one of them when it starts and cannot move to the other."""
+    return "assistant" if mode in _DELEGATING_MODES else "engine"
+
+
 async def _get_exec_mode(db) -> str:
     settings = await db["settings"].find_one({"_id": "global_config"}) or {}
     return settings.get("execution_mode", "auto")
@@ -967,6 +973,7 @@ async def _handle_start(event: dict, queue: asyncio.Queue):
             "workflow_id": workflow_id,
             "owner_id": "local_user",
             "session_title": title,
+            "execution_mode": exec_mode,
             "current_step_index": "0",
             "status": initial_status,
             "event_type": "MCP_PAUSE" if is_planner_delegated or first_step_type == "MCP_PAUSE" else "WORKFLOW"
