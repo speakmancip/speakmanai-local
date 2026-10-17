@@ -40,7 +40,7 @@ RAW_EVENTS_DB_NAME=speakmanai_db
 
 LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
-DEFAULT_MODEL=claude-haiku-5-5
+DEFAULT_MODEL=claude-sonnet-5-5
 STANDARD_MODEL=claude-sonnet-5-5
 ADVANCED_MODEL=claude-opus-5-5
 ```
@@ -306,7 +306,7 @@ The page footer shows the app version. Mention it in a bug report.
 | Provider | `LLM_PROVIDER` | Key variable | Fast (`DEFAULT_MODEL`) | Standard (`STANDARD_MODEL`) | Advanced (`ADVANCED_MODEL`) |
 |---|---|---|---|---|---|
 | Gemini | `gemini` | `GEMINI_API_KEY` | `gemini-3.5-flash-lite` | `gemini-3.8-flash` | `gemini-3.1-pro-preview` |
-| Claude | `anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-5-5` | `claude-sonnet-5-5` | `claude-opus-5-5` |
+| Claude | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-5-5` | `claude-sonnet-5-5` | `claude-opus-5-5` |
 | OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-6-luna` | `gpt-6.1-sol` | `gpt-6-astra` |
 | Ollama | `ollama` | *(none)* | set via `DEFAULT_MODEL` | set via `STANDARD_MODEL` | set via `ADVANCED_MODEL` |
 | Vertex AI | `vertexai` | `GCP_PROJECT_ID` + `GCP_REGION` | `gemini-3.5-flash-lite` | `gemini-3.8-flash` | `gemini-3.1-pro-preview` |

@@ -44,7 +44,7 @@ A closed **Send feedback** section posts a bug report, feature request, question
 
 ### Changes you may notice
 
-- **Default models** are now Claude Haiku 5.5, Sonnet 5.5 and Opus 5.5, and OpenAI gpt-6-luna, gpt-6.1-sol and gpt-6-astra (fast, standard, advanced). Gemini and Vertex AI defaults are unchanged. Saved configs that pin an older model keep using it until you save the setup page again. Older models stay selectable.
+- **Default models** are now Claude Sonnet 5.5 (fast and standard) and Opus 5.5 (advanced), and OpenAI gpt-6-luna, gpt-6.1-sol and gpt-6-astra (fast, standard, advanced). Gemini and Vertex AI defaults are unchanged. Saved configs that pin an older model keep using it until you save the setup page again. Older models stay selectable. Claude Haiku is not offered: as the fast tier it scored a validator run 0.0, so only Sonnet 5.5 and Opus 5.5, which have been run end to end, are the defaults. If you saved the setup page with Haiku on an early v1.5.0 build, choose another fast model and save again.
 - **HTML is opt-in.** The SAD and compliance report skills produce HTML only when you ask. A client that can run Python renders it locally with `scripts/render_html.py`, which the exe installs with the skills. `render_document` stays for clients with no shell, such as Copilot Studio.
 - **Smaller pauses.** In delegate mode, a pause used to repeat the full text of every output it depended on. When those total more than 20,000 characters, large outputs are now listed by agent and size, with an instruction to use your own copy or fetch it with `get_output`. One pause in a Claude app run had reached 73,540 characters, over that app's result limit. A delegated planner also no longer passes its agent list to every later agent.
 - **Find an old session by what it was about.** `list_sessions`, `poll_workflow` and `get_outputs` now return a `request_preview`, the first 200 characters of the request the session was started with, and `poll_workflow` returns the title as well. A session can sit for weeks between steps, and nobody remembers a session id. An assistant can match "the SAD about the bowling alley ecommerce tool" against the title and preview, then read the Business Context Clarifier output for the detail. Nothing times out: a session waits as long as it needs to.
@@ -58,7 +58,7 @@ A closed **Send feedback** section posts a bug report, feature request, question
 ### Fixed
 
 - The setup page's Execution Mode dropdown never reached the engine. It wrote to `config.json`, while the engine reads a database row. Present since the first release.
-- The Haiku output cap carried over from older models (8192) truncated every fast-tier Anthropic response. The 5.5 models now have 128,000.
+- The output cap carried over from older Haiku models (8192) truncated every fast-tier Anthropic response. Sonnet 5.5 and Opus 5.5 now have 128,000.
 - `generate_document` in `delegate_only` mode raises a clear error rather than calling a model that is paused.
 
 ### If you're upgrading

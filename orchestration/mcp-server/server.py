@@ -1717,9 +1717,9 @@ _CONFIG_PATH = Path.home() / ".speakmanai" / "config.json"
 
 _PROVIDER_MODELS = {
     "gemini":    {"fast": "gemini-3.5-flash-lite", "standard": "gemini-3.8-flash",  "advanced": "gemini-3.1-pro-preview"},
-    "anthropic": {"fast": "claude-haiku-5-5", "standard": "claude-sonnet-5-5", "advanced": "claude-opus-5-5"},
+    "anthropic": {"fast": "claude-sonnet-5-5", "standard": "claude-sonnet-5-5", "advanced": "claude-opus-5-5"},
     "openai":    {"fast": "gpt-6-luna",       "standard": "gpt-6.1-sol",       "advanced": "gpt-6-astra"},
-    "ollama":    {"fast": "",                       "standard": "",                  "advanced": ""},
+    "ollama":    {"fast": "",                      "standard": "",                  "advanced": ""},
 }
 
 _MCP_SERVER_NAME = "speakmanai"
@@ -2493,7 +2493,7 @@ def _build_setup_html(cfg: dict) -> str:
 <script>
 const MODELS = {{
   gemini:    {{ fast: ['gemini-3.5-flash-lite','gemini-3.1-flash-lite','gemini-3.8-flash'], standard: ['gemini-3.8-flash','gemini-3-flash-preview','gemini-3.5-flash-lite'], advanced: ['gemini-3.1-pro-preview','gemini-3.8-flash'] }},
-  anthropic: {{ fast: ['claude-haiku-5-5','claude-sonnet-5-5'], standard: ['claude-sonnet-5-5','claude-haiku-5-5','claude-sonnet-4-6','claude-sonnet-5'], advanced: ['claude-opus-5-5','claude-sonnet-5-5','claude-opus-4-8','claude-sonnet-4-6','claude-sonnet-5','claude-fable-5'] }},
+  anthropic: {{ fast: ['claude-sonnet-5-5','claude-opus-5-5'], standard: ['claude-sonnet-5-5','claude-sonnet-4-6','claude-sonnet-5'], advanced: ['claude-opus-5-5','claude-sonnet-5-5','claude-opus-4-8','claude-sonnet-4-6','claude-sonnet-5','claude-fable-5'] }},
   openai:    {{ fast: ['gpt-6-luna','gpt-6.1-sol','gpt-4o-mini'], standard: ['gpt-6.1-sol','gpt-6-luna','gpt-4o'], advanced: ['gpt-6-astra','gpt-6.1-sol','gpt-4o'] }},
   vertexai:  {{ fast: ['gemini-3.5-flash-lite','gemini-3.1-flash-lite','gemini-3.8-flash'], standard: ['gemini-3.8-flash','gemini-3-flash-preview','gemini-3.5-flash-lite'], advanced: ['gemini-3.1-pro-preview','gemini-3.8-flash'] }},
   ollama:    {{ fast: [], standard: [], advanced: [] }},
