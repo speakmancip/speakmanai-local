@@ -2194,6 +2194,17 @@ async def download_skills_bundle(name: str):
                         media_type="application/octet-stream" if name.endswith(".mcpb") else "application/zip")
 
 
+@app.get("/favicon.png")
+async def favicon():
+    """The browser tab icon for the setup page (assets/favicon.png, bundled in the exe)."""
+    import sys
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent.parent.parent))
+    path = base / "assets" / "favicon.png"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="No icon.")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
+
 def _build_setup_html(cfg: dict) -> str:
     """Generate the setup page HTML."""
     provider       = cfg.get("llm_provider", "gemini")
@@ -2216,6 +2227,7 @@ def _build_setup_html(cfg: dict) -> str:
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SPEAKMAN.AI Setup</title>
+<link rel="icon" type="image/png" href="/favicon.png">
 <style>
   *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
   body {{ font-family: system-ui, -apple-system, sans-serif; background: #0a0f1a; color: #e2e8f0; min-height: 100vh; display: flex; align-items: flex-start; justify-content: center; padding: 40px 24px; }}

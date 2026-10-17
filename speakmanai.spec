@@ -34,6 +34,8 @@ a = Analysis(
     ("orchestration/mcp-server/workflows_sync.py", "orchestration/mcp-server"),
         # Tray icon image (launcher.py)
         ("assets/speakmanai_agent_circle.png", "assets"),
+        # Browser tab icon for the setup page (server.py /favicon.png)
+        ("assets/favicon.png", "assets"),
     ] + skills_bundle,
     hiddenimports=[
         # FastAPI / Starlette
