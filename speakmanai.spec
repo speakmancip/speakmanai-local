@@ -32,6 +32,8 @@ a = Analysis(
         ("orchestration/mcp-server/document_renderer.py", "orchestration/mcp-server"),
         ("orchestration/mcp-server/skills_installer.py", "orchestration/mcp-server"),
     ("orchestration/mcp-server/workflows_sync.py", "orchestration/mcp-server"),
+        # Tray icon image (launcher.py)
+        ("assets/speakmanai_agent_circle.png", "assets"),
     ] + skills_bundle,
     hiddenimports=[
         # FastAPI / Starlette
@@ -93,5 +95,5 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     console=False,   # No terminal window — tray-only UX
-    icon=None,       # Replace with: icon="assets/speakmanai.ico"
+    icon="assets/speakmanai.ico",
 )

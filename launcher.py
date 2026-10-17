@@ -169,16 +169,26 @@ def open_browser() -> None:
     log.error("Server did not start in time.")
 
 
+def _tray_image(Image, ImageDraw):
+    """The SPEAKMAN.AI agent circle from assets/, or a plain green square if it is missing."""
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+    try:
+        with Image.open(base / "assets" / "speakmanai_agent_circle.png") as src:
+            return src.convert("RGBA").resize((64, 64), Image.LANCZOS)
+    except Exception as e:
+        log.info(f"Tray icon image not loaded ({e}); using the plain icon.")
+        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        ImageDraw.Draw(img).rounded_rectangle([4, 4, 60, 60], radius=12, fill="#00ff7f")
+        return img
+
+
 def run_tray() -> None:
     """Show a system tray icon with Open / Quit menu items."""
     try:
         import pystray
         from PIL import Image, ImageDraw
 
-        # Simple icon: dark background, green rounded square
-        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
-        d.rounded_rectangle([4, 4, 60, 60], radius=12, fill="#00ff7f")
+        img = _tray_image(Image, ImageDraw)
 
         def on_open(_icon, _item):
             webbrowser.open(f"http://127.0.0.1:{PORT}/setup")
