@@ -2303,8 +2303,8 @@ def _build_setup_html(cfg: dict) -> str:
   <div class="section">
     <h2>Connect your AI assistant</h2>
     <div class="radio-group" id="assistant-group">
-      <label data-a="claude_code" onclick="setAssistant('claude_code')">Claude Code (CLI)</label>
-      <label data-a="claude_app" onclick="setAssistant('claude_app')">Claude app (chat)</label>
+      <label data-a="claude_code" onclick="setAssistant('claude_code')">Claude Code</label>
+      <label data-a="claude_app" onclick="setAssistant('claude_app')">Claude app</label>
       <label data-a="copilot" onclick="setAssistant('copilot')">Copilot Studio</label>
       <label data-a="cursor" onclick="setAssistant('cursor')">Cursor</label>
       <label data-a="codex" onclick="setAssistant('codex')">Codex</label>
@@ -2330,7 +2330,7 @@ def _build_setup_html(cfg: dict) -> str:
           <li>Press Check again.</li>
         </ol>
       </div>
-      <div class="next-box" id="cc-next" style="display:none">Next: open Claude Code in any folder and type <code>/generate-sad</code>. Restart it first if it was already open.<br>In the Claude app, quit it fully (including the tray icon) and reopen it, then use its Code tab. The chat side of the app is separate: see the Claude app (chat) tab.</div>
+      <div class="next-box" id="cc-next" style="display:none">Next: open Claude Code in any folder and type <code>/generate-sad</code>. Restart it first if it was already open.<br>In the Claude app, quit it fully (including the tray icon) and reopen it, then use its Code tab. The chat side of the app is separate: see the Claude app tab.</div>
       <div class="exec-hint" id="skills-status"></div>
       <button class="btn btn-outline" id="skills-btn" onclick="installSkills()" style="display:none; margin-top:6px;">Install skills for Claude Code</button>
       <details class="sub" id="cc-path" style="display:none">
@@ -2349,7 +2349,7 @@ def _build_setup_html(cfg: dict) -> str:
     </div>
 
     <div class="panel" id="panel-claude_app" style="display:none">
-      <div class="exec-hint">For the Claude app: chat, Cowork and the Code tab. For Claude Code in a terminal, use the Claude Code (CLI) tab instead.</div>
+      <div class="exec-hint">For the Claude app: chat, Cowork and the Code tab. For Claude Code in a terminal, use the Claude Code tab instead.</div>
       <div class="exec-hint" style="margin-top:8px">The app's Add custom connector screen cannot take this address, because Anthropic's servers make that call and they cannot reach your computer. Use the extension instead. It is one small file, with no Node and no admin rights:</div>
       <ol class="steps">
         <li>Download <span class="dl" data-name="speakmanai-local.mcpb"></span>.</li>
