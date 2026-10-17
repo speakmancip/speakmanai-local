@@ -1843,6 +1843,13 @@ class RemoteAccessGate:
         if not (path == "/mcp" or path.startswith("/mcp/")):
             return await self._refuse(send, 403, "The setup page and its API are only available on the computer that runs SpeakmanAI.")
         if not _token_ok(headers, token):
+            # Names only, never values, so a refused client can be diagnosed from the log.
+            auth = headers.get(b"authorization", b"").decode("latin-1").strip()
+            log.info("Remote request refused (no valid token): %s %s; x-api-key %s; authorization %s; header names: %s",
+                     scope.get("method", ""), path,
+                     "present" if headers.get(b"x-api-key") else "absent",
+                     ("Bearer" if auth.lower().startswith("bearer ") else "present, not Bearer") if auth else "absent",
+                     ", ".join(sorted(k.decode("latin-1") for k in headers)))
             return await self._refuse(send, 401, "A valid access token is required.")
         return await self.app(scope, receive, send)
 
