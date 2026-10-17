@@ -49,3 +49,5 @@ workspace.json
 
 # Local test config (Windows Sandbox for the clean-machine install test)
 *.wsb
+
+RELEASE_RUNBOOK.md
