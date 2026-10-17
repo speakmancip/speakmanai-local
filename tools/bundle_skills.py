@@ -14,6 +14,8 @@ Reads a checkout of the speakmanai-cc repo (default: $SPEAKMANAI_CC_DIR, else a
     <out>/mcp-skills/<skill>/...           the desktop variants, served by get_skill
     <out>/downloads/*.zip                  bundles for manual clients, built by
                                            desktop-skills/build.ps1 in that checkout
+    <out>/downloads/speakmanai-local.mcpb  the Claude app extension, copied from
+                                           claude-app-extension/ in that checkout
     <out>/manifest.json                    version, commit and a sha256 per file
 
 speakmanai.spec picks <out> up when manifest.json exists.
@@ -39,6 +41,7 @@ DOWNLOADS = (
     "generate-speakmanai-code.zip",
     "copilot-studio-skills.zip",
 )
+EXTENSION = "speakmanai-local.mcpb"
 
 
 def _sha256(path: Path) -> str:
@@ -110,6 +113,13 @@ def main() -> int:
                 print(f"ERROR: build.ps1 did not produce {name}.", file=sys.stderr)
                 return 1
             shutil.copy2(src, downloads_out / name)
+
+    # The Claude app extension is committed packed, not built by build.ps1.
+    ext_src = cc / "claude-app-extension" / EXTENSION
+    if ext_src.is_file():
+        shutil.copy2(ext_src, downloads_out / EXTENSION)
+    else:
+        print(f"WARNING: {ext_src} not found; the setup page will not offer the Claude app extension.")
 
     plugin_version = ""
     try:

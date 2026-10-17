@@ -2158,7 +2158,8 @@ async def download_skills_bundle(name: str):
     manifest = skills_installer.load_manifest() or {}
     if name not in manifest.get("downloads", {}):
         raise HTTPException(status_code=404, detail="Unknown download.")
-    return FileResponse(skills_installer.bundle_dir() / "downloads" / name, filename=name, media_type="application/zip")
+    return FileResponse(skills_installer.bundle_dir() / "downloads" / name, filename=name,
+                        media_type="application/octet-stream" if name.endswith(".mcpb") else "application/zip")
 
 
 def _build_setup_html(cfg: dict) -> str:
@@ -2324,8 +2325,15 @@ def _build_setup_html(cfg: dict) -> str:
 
     <div class="panel" id="panel-claude_app" style="display:none">
       <div class="exec-hint">For the chat side of the Claude app. To use Claude Code inside the app, use the Claude Code (CLI) tab instead: it is simpler and needs no admin rights.</div>
-      <div class="exec-hint" style="margin-top:8px">The app's Add custom connector screen cannot take this address, because Anthropic's servers make that call and they cannot reach your computer. Instead, add this server to the app's config file through a small bridge program, which needs Node installed for your user. The guide has the steps and the exact text to paste.</div>
-      <div class="exec-hint" style="margin-top:8px">This server's address:</div>
+      <div class="exec-hint" style="margin-top:8px">The app's Add custom connector screen cannot take this address, because Anthropic's servers make that call and they cannot reach your computer. Use the extension instead. It is one small file, with no Node and no admin rights:</div>
+      <ol class="steps">
+        <li>Download <span class="dl" data-name="speakmanai-local.mcpb"></span>.</li>
+        <li>In the Claude app open Settings, Extensions, Advanced settings, Install Extension, and pick that file. Double-clicking it does not work on Windows.</li>
+        <li>The app shows a red warning because the extension is not from Anthropic's directory. It only passes requests to this server on your computer. Press Install.</li>
+        <li>Leave the port as <code class="port">8000</code> unless this page is on another. Save stays grey until you edit the field: change the number and change it back.</li>
+        <li>Turn the extension on (it installs switched off), keep this program running, and start a new chat.</li>
+      </ol>
+      <div class="exec-hint" style="margin-top:8px">Cowork and the chat are one screen, so this covers both. Without the extension the guide also has a config-file route, which needs Node installed for your user. This server's address, for that route:</div>
       <div class="copy-row"><code class="mcp-url" id="mcp-url-app"></code><button class="btn btn-outline btn-copy" onclick="copyText('mcp-url-app')">Copy</button></div>
       <div class="exec-hint" style="margin-top:8px">Optional: the skills plugin, to upload in the app's plugin settings (all 17 skills in one upload): <span class="dl" data-name="speakmanai-sdlc.zip"></span>. The app can also fetch skills from this server without it.</div>
       <div class="exec-hint" style="margin-top:8px">Full guide: <a href="https://github.com/speakmancip/speakmanai-cc/blob/master/desktop-skills/CLAUDE_APP.md" target="_blank" rel="noopener">CLAUDE_APP.md</a>. Cowork uses the same steps (it needs one admin approval to install).</div>
