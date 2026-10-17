@@ -2311,7 +2311,7 @@ def _build_setup_html(cfg: dict) -> str:
     </div>
 
     <div class="panel" id="panel-claude_code">
-      <div class="exec-hint" style="margin-bottom:10px">Recommended. Covers Claude Code in a terminal and the Code tab of the Claude app. No admin rights needed.</div>
+      <div class="exec-hint" style="margin-bottom:10px">Recommended for Claude Code in a terminal. No admin rights needed. (The Claude app's Code tab also works with the extension on the Claude app tab, with no terminal.)</div>
       <div class="status-line"><span class="status-dot" id="cc-dot"></span><span id="cc-status">Checking for Claude Code...</span></div>
       <div id="cc-ready" style="display:none">
         <button class="btn btn-primary" id="cc-connect" onclick="connectClient('claude_code')">Connect Claude Code</button>
@@ -2349,7 +2349,7 @@ def _build_setup_html(cfg: dict) -> str:
     </div>
 
     <div class="panel" id="panel-claude_app" style="display:none">
-      <div class="exec-hint">For the chat side of the Claude app. To use Claude Code inside the app, use the Claude Code (CLI) tab instead: it is simpler and needs no admin rights.</div>
+      <div class="exec-hint">For the Claude app: chat, Cowork and the Code tab. For Claude Code in a terminal, use the Claude Code (CLI) tab instead.</div>
       <div class="exec-hint" style="margin-top:8px">The app's Add custom connector screen cannot take this address, because Anthropic's servers make that call and they cannot reach your computer. Use the extension instead. It is one small file, with no Node and no admin rights:</div>
       <ol class="steps">
         <li>Download <span class="dl" data-name="speakmanai-local.mcpb"></span>.</li>
@@ -2360,7 +2360,7 @@ def _build_setup_html(cfg: dict) -> str:
       </ol>
       <div class="exec-hint" style="margin-top:8px">Cowork and the chat are one screen, so this covers both. Without the extension the guide also has a config-file route, which needs Node installed for your user. This server's address, for that route:</div>
       <div class="copy-row"><code class="mcp-url" id="mcp-url-app"></code><button class="btn btn-outline btn-copy" onclick="copyText('mcp-url-app')">Copy</button></div>
-      <div class="exec-hint" style="margin-top:8px">Optional: the skills plugin, to upload in the app's plugin settings (all 17 skills in one upload): <span class="dl" data-name="speakmanai-sdlc.zip"></span>. The app can also fetch skills from this server without it.</div>
+      <div class="exec-hint" style="margin-top:8px">Optional: the skills plugin, to upload in the app's plugin settings (all 17 skills in one upload): <span class="dl" data-name="speakmanai-sdlc.zip"></span>. It is needed for slash commands such as <code>/generate-sad</code>; without it the app can still fetch skills from this server.</div>
       <div class="exec-hint" style="margin-top:8px">Full guide: <a href="https://github.com/speakmancip/speakmanai-cc/blob/master/desktop-skills/CLAUDE_APP.md" target="_blank" rel="noopener">CLAUDE_APP.md</a>. Cowork uses the same steps (it needs one admin approval to install).</div>
     </div>
 
