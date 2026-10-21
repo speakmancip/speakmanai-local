@@ -511,7 +511,7 @@ async def poll_workflow(mcp_ctx: Context, session_id: str = "", sid: str = "") -
     is_system_session = session_workflow_type == "system"
 
     if is_failed:
-        error_msg = doc.get("error_message", "Workflow failed - check agent configuration.")
+        error_msg = doc.get("error_message") or "Workflow failed - check agent configuration."
         raise RuntimeError(f"Workflow {session_id} failed: {error_msg}")
 
     is_awaiting_input = current_status == "AWAITING_INPUT"

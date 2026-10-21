@@ -218,7 +218,40 @@ def _resolve_model(model_name: str) -> tuple[str, str]:
     return provider, model_name
 
 
+# Transient model errors (rate limit, overload) are retried with exponential backoff and jitter:
+# wait = base * 2**attempt + jitter, so 2, 4, 8, 16, 32 seconds (plus up to 1s) for 5 retries.
+_LLM_MAX_RETRIES = 5
+_LLM_BASE_BACKOFF = 2.0
+_TRANSIENT_STATUS = {429, 500, 502, 503, 504}
+_TRANSIENT_MARKERS = ("RESOURCE_EXHAUSTED", "UNAVAILABLE", "Too Many Requests", "overloaded")
+
+
+def _is_transient_llm_error(e: Exception) -> bool:
+    """True for a rate limit or temporary server error from any provider SDK."""
+    code = getattr(e, "status_code", None) or getattr(e, "code", None)
+    if code is None:
+        code = getattr(getattr(e, "response", None), "status_code", None)
+    if isinstance(code, int) and code in _TRANSIENT_STATUS:
+        return True
+    return any(m in str(e) for m in _TRANSIENT_MARKERS)
+
+
 async def _call_llm(system_prompt: str, user_content: str, model_name: str, mime_type: str, temperature: float = 0.0) -> str:
+    """Calls the model, retrying transient errors (429, 5xx, RESOURCE_EXHAUSTED, UNAVAILABLE).
+    Covers the planner, AI steps, validators and document generation."""
+    import random
+    for attempt in range(_LLM_MAX_RETRIES + 1):
+        try:
+            return await _call_llm_once(system_prompt, user_content, model_name, mime_type, temperature)
+        except Exception as e:
+            if attempt >= _LLM_MAX_RETRIES or not _is_transient_llm_error(e):
+                raise
+            wait = _LLM_BASE_BACKOFF * (2 ** attempt) + random.uniform(0, 1)
+            log.warning(f"_call_llm transient error (attempt {attempt + 1} of {_LLM_MAX_RETRIES + 1}), retrying in {wait:.1f}s: {str(e)[:200]}")
+            await asyncio.sleep(wait)
+
+
+async def _call_llm_once(system_prompt: str, user_content: str, model_name: str, mime_type: str, temperature: float = 0.0) -> str:
     """Unified LLM caller: routes to Gemini/Vertex, Anthropic, OpenAI, or Ollama.
     Reads config live from os.environ — no restart needed after /api/config changes."""
 
@@ -955,6 +988,7 @@ async def _handle_start(event: dict, queue: asyncio.Queue):
                     "data": {"error_message": f"Planner failed: {str(e)}"}
                 }
                 await _log_event_to_db(session_id, error_event, db)
+                await db["events_raw"].update_one({"session_id": session_id}, {"$set": {"current_status": "FAILED", "error_message": f"Planner failed: {str(e)}"}})
                 return
 
     if is_planner_delegated and workflow_type != "system":
