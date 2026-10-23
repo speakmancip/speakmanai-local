@@ -69,7 +69,7 @@ MODEL_TIERS = {
 
 # Reverse map: known model name → tier (used for cross-provider conflict resolution)
 _MODEL_TO_TIER = {
-    "gemini-3.1-pro-preview": "advanced", "gemini-3.8-flash": "standard",
+    "gemini-3.1-pro-preview": "advanced", "gemini-4-argon": "advanced", "gemini-3.8-flash": "standard",
     "gemini-3-flash-preview": "standard",
     "gemini-3.5-flash-lite": "fast", "gemini-3.1-flash-lite": "fast",
     "claude-opus-5-5": "advanced",  "claude-sonnet-5-5": "standard",
@@ -308,7 +308,7 @@ async def _call_llm_once(system_prompt: str, user_content: str, model_name: str,
             "system_instruction": system_prompt,
             "response_mime_type": mime_type,
         }
-        if not model_name.startswith("gemini-3"):
+        if not model_name.startswith(("gemini-3", "gemini-4")):
             _gemini_config_kwargs["temperature"] = temperature
         response = await client.aio.models.generate_content(
             model=model_name,
