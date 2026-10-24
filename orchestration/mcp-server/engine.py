@@ -226,6 +226,11 @@ _TRANSIENT_STATUS = {429, 500, 502, 503, 504}
 _TRANSIENT_MARKERS = ("RESOURCE_EXHAUSTED", "UNAVAILABLE", "Too Many Requests", "overloaded")
 
 
+class LLMOutputTruncated(Exception):
+    """The model hit its output limit. Not transient: retrying the same request cuts off at the
+    same place, so it is not retried and the step fails with this message."""
+
+
 def _is_transient_llm_error(e: Exception) -> bool:
     """True for a rate limit or temporary server error from any provider SDK."""
     code = getattr(e, "status_code", None) or getattr(e, "code", None)
@@ -258,6 +263,8 @@ async def _call_llm_once(system_prompt: str, user_content: str, model_name: str,
     cfg = _cfg()
     active_provider, model_name = _resolve_model(model_name)
     log.info(f"_call_llm provider={active_provider} model={model_name}")
+    finish_reason = None   # why the model stopped, where the provider reports it
+    truncated = False      # True when it stopped at its output limit, so the text is incomplete
 
     # ── Ollama ────────────────────────────────────────────────────────────────
     if active_provider == "ollama":
@@ -283,6 +290,10 @@ async def _call_llm_once(system_prompt: str, user_content: str, model_name: str,
             messages=[{"role": "user", "content": user_content}],
         ) as stream:
             result_text = await stream.get_final_text()
+            final_message = await stream.get_final_message()
+            finish_reason = getattr(final_message, "stop_reason", None)
+            if finish_reason == "max_tokens":
+                truncated = True
 
     # ── OpenAI ────────────────────────────────────────────────────────────────
     elif active_provider == "openai":
@@ -296,6 +307,9 @@ async def _call_llm_once(system_prompt: str, user_content: str, model_name: str,
             ],
         )
         result_text = response.choices[0].message.content or ""
+        finish_reason = response.choices[0].finish_reason
+        if finish_reason == "length":
+            truncated = True
 
     # ── Gemini / Vertex AI ────────────────────────────────────────────────────
     else:
@@ -316,6 +330,21 @@ async def _call_llm_once(system_prompt: str, user_content: str, model_name: str,
             config=_genai_types.GenerateContentConfig(**_gemini_config_kwargs),
         )
         result_text = response.text
+        cands = getattr(response, "candidates", None) or []
+        finish_reason = getattr(cands[0], "finish_reason", None) if cands else None
+        if finish_reason is not None:
+            finish_reason = getattr(finish_reason, "name", str(finish_reason))
+            if finish_reason == "MAX_TOKENS":
+                truncated = True
+
+    log.info(f"_call_llm finished provider={active_provider} model={model_name} finish_reason={finish_reason} chars={len(result_text or '')}")
+    if truncated:
+        log.error(f"--- TRUNCATED LLM RESPONSE START ---\n{result_text}\n--- TRUNCATED LLM RESPONSE END ---")
+        raise LLMOutputTruncated(
+            f"The model stopped because it reached its output limit ({finish_reason}) after "
+            f"{len(result_text or '')} characters, so the output is incomplete. The input is too "
+            "large to produce in one step. Split the work into smaller parts instead of retrying."
+        )
 
     log.info(f"--- RAW LLM RESPONSE START ---\n{result_text}\n--- RAW LLM RESPONSE END ---")
 
