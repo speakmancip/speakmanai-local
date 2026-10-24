@@ -452,6 +452,21 @@ async def build_project_record(session_id: str, db):
     await db["projects"].update_one({"session_id": session_id}, {"$set": project_doc}, upsert=True)
 
 
+def _collect_hitl_feedback(events: list, step_idx) -> str:
+    """Human 'Update' feedback given so far at one step, oldest first. The validator that runs
+    after a regeneration needs it, or it scores the output against its own checks and pulls the
+    revision back toward what the person just rejected."""
+    out = []
+    for e in events:
+        attrs = e.get("attributes", {})
+        if attrs.get("hitl_retry") != "true" or str(attrs.get("current_step_index")) != str(step_idx):
+            continue
+        fb = (e.get("data", {}).get("execution_context", {}) or {}).get("hitl_feedback")
+        if fb:
+            out.append(f"Round {attrs.get('hitl_loop', '?')}:\n{fb}")
+    return "\n\n".join(out)
+
+
 def _compile_dependencies_context(agent_config: dict, events: list) -> str:
     """Compiles a unified context block based on the agent's specific dependencies."""
     dependencies = agent_config.get("dependencies", []) if agent_config else []
@@ -1415,6 +1430,15 @@ async def _handle_validate_step(event: dict, queue: asyncio.Queue):
         validator_user_content = f"# OUTPUT UNDER REVIEW ({agent_id})\n{content_to_validate}"
         if dep_context:
             validator_user_content += f"\n\n{dep_context}"
+        human_decisions = _collect_hitl_feedback(events, current_step_idx)
+        if human_decisions:
+            validator_user_content += (
+                "\n\n# HUMAN REVIEWER DECISIONS (already applied to the output under review)\n"
+                "A person reviewed earlier versions of this output and asked for the changes below. "
+                "These are owner decisions. Do not fail the output for following them, and do not "
+                "ask for them to be reversed. Judge the rest of the output against your checks.\n\n"
+                f"{human_decisions}"
+            )
 
         log.info(f"[{session_id}] Running validation loop {validation_loop+1}/{max_loops} with {validator_agent_id}...")
         validated_by = {"agent": validator_agent_id, "kind": "engine_model", "provider": LLM_PROVIDER,
